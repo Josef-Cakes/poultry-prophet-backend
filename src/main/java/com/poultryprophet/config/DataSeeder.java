@@ -19,9 +19,8 @@ public class DataSeeder {
                                                ThresholdConfigRepository thresholdRepository) {
         return args -> {
             if (stageRepository.count() == 0) {
-                // Blueprint game fowl lifecycle. MVP scope covers brooding + ranging through the
-                // month-5 selection decision; pre-conditioning/maintenance/conditioning are seeded
-                // for lifecycle correctness but are Phase 2 functionality.
+                // Lifecycle reference data. Later stages are retained for compatibility but are not
+                // evidence that selection or prediction is an MVP capability.
                 stageRepository.saveAll(List.of(
                         new LifecycleStage("brooding", 0),
                         new LifecycleStage("ranging", 1),

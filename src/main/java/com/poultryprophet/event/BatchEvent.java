@@ -11,9 +11,11 @@ import jakarta.persistence.Table;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.UUID;
 
 @Entity
-@Table(name = "batch_event")
+@Table(name = "batch_event",
+        indexes = @jakarta.persistence.Index(name = "idx_batch_event_operation_id", columnList = "operation_id", unique = true))
 public class BatchEvent {
 
     @Id
@@ -25,6 +27,10 @@ public class BatchEvent {
 
     @Column(name = "handler_id", nullable = false)
     private Long handlerId;
+
+    /** Client operation identity. Nullable only for legacy rows imported before idempotency. */
+    @Column(name = "operation_id", unique = true)
+    private UUID operationId;
 
     @Column(name = "event_date", nullable = false)
     private LocalDate eventDate;
@@ -40,6 +46,14 @@ public class BatchEvent {
     /** Number of birds directly involved in the event. 0 = general observation. */
     @Column(name = "affected_count", nullable = false)
     private int affectedCount;
+
+    /** Signed population effect applied by the ledger. Zero for informational events. */
+    @Column(name = "population_delta")
+    private Integer populationDelta;
+
+    /** Population after this event committed; useful for idempotent retry responses/audit. */
+    @Column(name = "population_after")
+    private Integer populationAfter;
 
     /** Short title — primary cause, medicine name, or behaviour category. */
     @Column(nullable = false)
@@ -65,6 +79,9 @@ public class BatchEvent {
     public Long getHandlerId() { return handlerId; }
     public void setHandlerId(Long handlerId) { this.handlerId = handlerId; }
 
+    public UUID getOperationId() { return operationId; }
+    public void setOperationId(UUID operationId) { this.operationId = operationId; }
+
     public LocalDate getEventDate() { return eventDate; }
     public void setEventDate(LocalDate eventDate) { this.eventDate = eventDate; }
 
@@ -76,6 +93,12 @@ public class BatchEvent {
 
     public int getAffectedCount() { return affectedCount; }
     public void setAffectedCount(int affectedCount) { this.affectedCount = affectedCount; }
+
+    public Integer getPopulationDelta() { return populationDelta; }
+    public void setPopulationDelta(Integer populationDelta) { this.populationDelta = populationDelta; }
+
+    public Integer getPopulationAfter() { return populationAfter; }
+    public void setPopulationAfter(Integer populationAfter) { this.populationAfter = populationAfter; }
 
     public String getTitle() { return title; }
     public void setTitle(String title) { this.title = title; }

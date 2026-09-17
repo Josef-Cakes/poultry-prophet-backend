@@ -42,6 +42,9 @@ public class BatchService {
 
     @Transactional
     public BatchResponse create(CreateBatchRequest request, Long farmId) {
+        if (farmId == null) {
+            throw new BadRequestException("Join a farm before creating a batch");
+        }
         if (batchRepository.existsByFarmIdAndNameIgnoreCase(farmId, request.name())) {
             throw new BadRequestException("A batch named '" + request.name() + "' already exists on this farm");
         }
@@ -68,7 +71,7 @@ public class BatchService {
             if (handler.getRole() != Role.HANDLER) {
                 throw new BadRequestException("User " + handlerId + " is not a handler");
             }
-            if (!handler.getFarmId().equals(farmId)) {
+            if (!farmId.equals(handler.getFarmId())) {
                 throw new BadRequestException("Handler " + handlerId + " belongs to a different farm");
             }
             assignmentRepository.save(new BatchHandlerAssignment(batch, handler));
@@ -218,5 +221,12 @@ public class BatchService {
         if (days <= 30) return "brooding";
         if (days <= 120) return "ranging";
         return "pre-conditioning";
+    }
+
+    /** Loads a farm-scoped batch while holding a database row lock for accounting writes. */
+    @Transactional
+    public Batch requireBatchForUpdate(Long batchId, Long farmId) {
+        return batchRepository.findByIdAndFarmIdForUpdate(batchId, farmId)
+                .orElseThrow(() -> new NotFoundException("Batch " + batchId + " not found"));
     }
 }

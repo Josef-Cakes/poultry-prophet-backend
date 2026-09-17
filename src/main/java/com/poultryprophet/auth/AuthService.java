@@ -47,14 +47,11 @@
             user.setEmail(request.email());
             user.setPasswordHash(passwordEncoder.encode(request.password()));
             user.setFullName(request.fullName());
-            user.setRole(request.role());
-
-            if (request.role() == Role.MANAGER) {
-                Farm farm = farmRepository.save(new Farm());
-                user.setFarmId(farm.getId());
-            } else {
-                user.setFarmId(null);
-            }
+            // Public registration is intentionally manager-only. Handler accounts are
+            // provisioned by a manager or accepted through the invitation flow.
+            user.setRole(Role.MANAGER);
+            Farm farm = farmRepository.save(new Farm());
+            user.setFarmId(farm.getId());
 
             userRepository.save(user);
             return toResponse(user);

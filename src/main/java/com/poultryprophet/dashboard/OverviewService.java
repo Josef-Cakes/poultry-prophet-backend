@@ -3,6 +3,8 @@ package com.poultryprophet.dashboard;
 import com.poultryprophet.alert.AlertRepository;
 import com.poultryprophet.alert.dto.AlertResponse;
 import com.poultryprophet.analytics.IndicatorRepository;
+import com.poultryprophet.analytics.ThresholdConfig;
+import com.poultryprophet.analytics.ThresholdConfigRepository;
 import com.poultryprophet.analytics.dto.IndicatorResponse;
 import com.poultryprophet.batch.Batch;
 import com.poultryprophet.batch.BatchHandlerAssignmentRepository;
@@ -16,6 +18,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
 
 /** SDD 3.1: aggregation logic for the batch dashboard. */
 @Service
@@ -28,17 +32,20 @@ public class OverviewService {
     private final IndicatorRepository indicatorRepository;
     private final DailyRecordRepository recordRepository;
     private final AlertRepository alertRepository;
+    private final ThresholdConfigRepository thresholdRepository;
 
     public OverviewService(BatchService batchService,
                            BatchHandlerAssignmentRepository assignmentRepository,
                            IndicatorRepository indicatorRepository,
                            DailyRecordRepository recordRepository,
-                           AlertRepository alertRepository) {
+                           AlertRepository alertRepository,
+                           ThresholdConfigRepository thresholdRepository) {
         this.batchService = batchService;
         this.assignmentRepository = assignmentRepository;
         this.indicatorRepository = indicatorRepository;
         this.recordRepository = recordRepository;
         this.alertRepository = alertRepository;
+        this.thresholdRepository = thresholdRepository;
     }
 
     @Transactional(readOnly = true)
@@ -51,8 +58,10 @@ public class OverviewService {
                 stageView.stage(), stageView.auto());
 
         IndicatorResponse latestIndicator = indicatorRepository
-                .findFirstByBatchIdOrderByComputedAtDesc(batchId)
-                .map(IndicatorResponse::from)
+                .findByBatchIdOrderByObservationDateDesc(batchId, PageRequest.of(0, 1))
+                .stream()
+                .findFirst()
+                .map(indicator -> IndicatorResponse.from(indicator, effectiveThresholds(farmId)))
                 .orElse(null);
 
         List<DailyRecordResponse> recentRecords = recordRepository
@@ -68,5 +77,13 @@ public class OverviewService {
                 .toList();
 
         return new BatchOverviewResponse(batchResponse, latestIndicator, recentRecords, activeAlerts);
+    }
+
+    private Map<String, ThresholdConfig> effectiveThresholds(Long farmId) {
+        Map<String, ThresholdConfig> thresholds = new HashMap<>();
+        for (String metric : List.of("BHI", "BSI", "WFR")) {
+            thresholdRepository.findEffective(farmId, metric).ifPresent(value -> thresholds.put(metric, value));
+        }
+        return thresholds;
     }
 }

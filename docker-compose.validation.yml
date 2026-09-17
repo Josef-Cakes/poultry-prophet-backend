@@ -1,0 +1,40 @@
+services:
+  validation-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${VALIDATION_DB_NAME}
+      POSTGRES_USER: ${VALIDATION_DB_USER}
+      POSTGRES_PASSWORD: ${VALIDATION_DB_PASSWORD}
+    ports:
+      - "${VALIDATION_DB_PORT:-55432}:5432"
+    volumes:
+      - poultry_prophet_validation_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  validation-backend:
+    build: .
+    depends_on:
+      validation-db:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: validation
+      PORT: 8080
+      SPRING_DATASOURCE_URL: jdbc:postgresql://validation-db:5432/${VALIDATION_DB_NAME}
+      SPRING_DATASOURCE_USERNAME: ${VALIDATION_DB_USER}
+      SPRING_DATASOURCE_PASSWORD: ${VALIDATION_DB_PASSWORD}
+      JWT_SECRET: ${VALIDATION_JWT_SECRET}
+      APP_ENVIRONMENT: validation
+      APP_VERSION: ${APP_VERSION:-0.1.0-validation}
+      APP_COMMIT_SHA: ${APP_COMMIT_SHA:-validation-local}
+      APP_BUILD_TIME: ${APP_BUILD_TIME:-unknown}
+      APP_FRONTEND_VERSION: ${APP_FRONTEND_VERSION:-0.1.0-validation}
+      APP_ALLOWED_ORIGINS: ${APP_ALLOWED_ORIGINS:-http://localhost:3000}
+    ports:
+      - "${VALIDATION_API_PORT:-18080}:8080"
+
+volumes:
+  poultry_prophet_validation_db:

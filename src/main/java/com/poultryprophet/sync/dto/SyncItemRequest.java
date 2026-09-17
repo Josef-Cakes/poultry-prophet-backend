@@ -12,7 +12,7 @@ public record SyncItemRequest(
         @NotNull Long batchId,
         @NotNull LocalDate recordDate,
         @NotNull Double temperatureC,
-        @NotNull @Min(0) Integer mortalityCount,
+        @Min(0) Integer mortalityCount,
         @NotNull Double feedIntakeG,
         @NotNull Double waterIntakeMl,
         String behaviorNotes,

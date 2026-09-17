@@ -7,9 +7,9 @@ spring:
   # Supabase -> Project Settings -> Database -> Connection string (use the
   # "Session pooler" / port 5432 URI for JPA/Hibernate). SSL is required.
   datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://aws-1-ap-southeast-2.pooler.supabase.com:5432/postgres?sslmode=require}
-    username: ${SPRING_DATASOURCE_USERNAME:postgres.vmvfisprlceyhbzjluvk}
-    password: ${SPRING_DATASOURCE_PASSWORD:8vBTlITyft4Sas6m}
+    url: ${SUPABASE_DATABASE_URL}
+    username: ${SUPABASE_DATABASE_USERNAME}
+    password: ${SUPABASE_DB_PASSWORD}
     driver-class-name: org.postgresql.Driver
 
   jpa:
@@ -18,6 +18,7 @@ spring:
     defer-datasource-initialization: true
     properties:
       hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
         format_sql: false
         jdbc:
           time_zone: UTC
@@ -28,7 +29,26 @@ spring:
       mode: always
 
 server:
-  port: ${SERVER_PORT:8080}
+  port: ${PORT:${SERVER_PORT:8080}}
+
+# Optional Render self-ping. Set APP_RENDER_URL in the deployed service to
+# keep a free instance warm; leaving it unset disables the scheduler action.
+app:
+  time-zone: ${APP_TIME_ZONE:Asia/Manila}
+  release:
+    version: ${APP_VERSION:0.1.0-validation}
+    commit-sha: ${APP_COMMIT_SHA:unknown}
+    build-time: ${APP_BUILD_TIME:unknown}
+    environment: ${APP_ENVIRONMENT:local}
+    frontend-version: ${APP_FRONTEND_VERSION:0.1.0-validation}
+  legacy:
+    # Production stays fail-closed. Enable only for a separately approved, owner-reviewed repair.
+    allow-mortality-reconciliation: ${APP_ALLOW_LEGACY_MORTALITY_RECONCILIATION:false}
+  render:
+    url: ${APP_RENDER_URL:}
+  keep-alive:
+    initial-delay-ms: ${APP_KEEP_ALIVE_INITIAL_DELAY_MS:60000}
+    fixed-rate-ms: ${APP_KEEP_ALIVE_FIXED_RATE_MS:600000}
 
 # Application-specific configuration.
 poultry:
@@ -36,6 +56,7 @@ poultry:
     # CHANGE THIS in production. Must be a Base64-encoded secret of at least 256 bits (32 bytes).
     jwt-secret: ${JWT_SECRET:Y2hhbmdlLW1lLXBvdWx0cnktcHJvcGhldC1zdXBlci1zZWNyZXQta2V5LTEyMzQ1Ng==}
     jwt-expiration-ms: ${JWT_EXPIRATION_MS:86400000} # 24h
+    allowed-origins: ${APP_ALLOWED_ORIGINS:http://localhost:3000}
   analytics:
     # Composite BHI weights (configuration-driven, per SDD 2.1). Normalised internally.
     weights:

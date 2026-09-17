@@ -32,6 +32,7 @@ public class BatchController {
     }
 
     @PostMapping
+    @PreAuthorize("hasAnyRole('MANAGER', 'HANDLER')")
     public ResponseEntity<BatchResponse> create(@Valid @RequestBody CreateBatchRequest request,
                                                 @AuthenticationPrincipal CustomUserDetails principal) {
         BatchResponse response = batchService.create(request, principal.getFarmId());

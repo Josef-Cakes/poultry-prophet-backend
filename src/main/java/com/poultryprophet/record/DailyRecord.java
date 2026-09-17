@@ -50,6 +50,18 @@ public class DailyRecord {
     @Column(nullable = false)
     private double waterIntakeMl;
 
+    @Enumerated(EnumType.STRING)
+    @Column
+    private ObservationQuality temperatureQuality = ObservationQuality.UNKNOWN;
+
+    @Enumerated(EnumType.STRING)
+    @Column
+    private ObservationQuality feedQuality = ObservationQuality.UNKNOWN;
+
+    @Enumerated(EnumType.STRING)
+    @Column
+    private ObservationQuality waterQuality = ObservationQuality.UNKNOWN;
+
     @Column(columnDefinition = "text")
     private String behaviorNotes;
 
@@ -126,6 +138,30 @@ public class DailyRecord {
 
     public void setWaterIntakeMl(double waterIntakeMl) {
         this.waterIntakeMl = waterIntakeMl;
+    }
+
+    public ObservationQuality getTemperatureQuality() {
+        return temperatureQuality == null ? ObservationQuality.UNKNOWN : temperatureQuality;
+    }
+
+    public void setTemperatureQuality(ObservationQuality temperatureQuality) {
+        this.temperatureQuality = temperatureQuality == null ? ObservationQuality.UNKNOWN : temperatureQuality;
+    }
+
+    public ObservationQuality getFeedQuality() {
+        return feedQuality == null ? ObservationQuality.UNKNOWN : feedQuality;
+    }
+
+    public void setFeedQuality(ObservationQuality feedQuality) {
+        this.feedQuality = feedQuality == null ? ObservationQuality.UNKNOWN : feedQuality;
+    }
+
+    public ObservationQuality getWaterQuality() {
+        return waterQuality == null ? ObservationQuality.UNKNOWN : waterQuality;
+    }
+
+    public void setWaterQuality(ObservationQuality waterQuality) {
+        this.waterQuality = waterQuality == null ? ObservationQuality.UNKNOWN : waterQuality;
     }
 
     public String getBehaviorNotes() {

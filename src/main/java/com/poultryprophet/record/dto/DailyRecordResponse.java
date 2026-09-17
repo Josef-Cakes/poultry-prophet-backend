@@ -1,6 +1,7 @@
 package com.poultryprophet.record.dto;
 
 import com.poultryprophet.record.DailyRecord;
+import com.poultryprophet.record.ObservationQuality;
 import com.poultryprophet.record.SyncStatus;
 
 import java.time.Instant;
@@ -16,6 +17,9 @@ public record DailyRecordResponse(
         int mortalityCount,
         double feedIntakeG,
         double waterIntakeMl,
+        ObservationQuality temperatureQuality,
+        ObservationQuality feedQuality,
+        ObservationQuality waterQuality,
         String behaviorNotes,
         SyncStatus syncStatus,
         Instant createdAt
@@ -31,6 +35,9 @@ public record DailyRecordResponse(
                 r.getMortalityCount(),
                 r.getFeedIntakeG(),
                 r.getWaterIntakeMl(),
+                r.getTemperatureQuality(),
+                r.getFeedQuality(),
+                r.getWaterQuality(),
                 r.getBehaviorNotes(),
                 r.getSyncStatus(),
                 r.getCreatedAt());

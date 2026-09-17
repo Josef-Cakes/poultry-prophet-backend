@@ -20,3 +20,11 @@ Thumbs.db
 ### Env ###
 .env
 *.local
+.env.*
+!.env.example
+!.env.validation.example
+
+application-local.yml
+application-dev.yml
+*.pem
+*.key
