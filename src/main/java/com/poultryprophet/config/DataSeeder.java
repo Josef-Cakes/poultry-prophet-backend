@@ -33,6 +33,7 @@ public class DataSeeder {
             seedThreshold(thresholdRepository, "BHI", 60.0, 100.0);
             seedThreshold(thresholdRepository, "BSI", 0.0, 40.0);
             seedThreshold(thresholdRepository, "WFR", 1.5, 2.5);
+            seedThreshold(thresholdRepository, "CRS", 60.0, 100.0);
         };
     }
 

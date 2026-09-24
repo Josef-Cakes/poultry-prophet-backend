@@ -25,6 +25,13 @@ public class AlertController {
         this.alertService = alertService;
     }
 
+    @GetMapping("/alerts")
+    public List<AlertResponse> listForFarm(@RequestParam(defaultValue = "true") boolean activeOnly,
+                                           @RequestParam(defaultValue = "100") int limit,
+                                           @AuthenticationPrincipal CustomUserDetails principal) {
+        return alertService.listForFarm(principal.getFarmId(), activeOnly, limit);
+    }
+
     @GetMapping("/batches/{batchId}/alerts")
     public List<AlertResponse> list(@PathVariable Long batchId,
                                     @RequestParam(defaultValue = "false") boolean activeOnly,

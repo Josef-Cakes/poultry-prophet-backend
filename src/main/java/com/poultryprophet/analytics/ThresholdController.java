@@ -18,13 +18,14 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
-/** SDD 2.4: thresholds are DB-backed and editable without code changes. */
+/** Legacy provisional indicator thresholds retained outside the primary MVP workflow. */
 @RestController
 @RequestMapping("/api/legacy/thresholds")
 public class ThresholdController {
 
-    private static final java.util.Set<String> MVP_INDICATORS = java.util.Set.of("BHI", "BSI", "WFR");
+    private static final Set<String> MVP_INDICATORS = Set.of("BHI", "BSI", "WFR");
 
     private final ThresholdConfigRepository thresholdRepository;
 
@@ -32,22 +33,18 @@ public class ThresholdController {
         this.thresholdRepository = thresholdRepository;
     }
 
-    /**
-     * Effective thresholds for the caller's farm: the global defaults, each overridden by a
-     * farm-specific row where one exists. A fresh farm sees the seeded defaults (marked global)
-     * so a manager always has something to adjust.
-     */
     @GetMapping
     public List<ThresholdResponse> list(@AuthenticationPrincipal CustomUserDetails principal) {
         Map<String, ThresholdConfig> effective = new LinkedHashMap<>();
-        for (ThresholdConfig global : thresholdRepository.findByFarmIdIsNull()) {
-            effective.put(global.getIndicator(), global);
-        }
-        for (ThresholdConfig farmSpecific : thresholdRepository.findByFarmId(principal.getFarmId())) {
-            effective.put(farmSpecific.getIndicator(), farmSpecific); // farm override wins
+        thresholdRepository.findByFarmIdIsNull()
+                .forEach(threshold -> effective.put(threshold.getIndicator(), threshold));
+        Long farmId = principal.getFarmId();
+        if (farmId != null) {
+            thresholdRepository.findByFarmId(farmId)
+                    .forEach(threshold -> effective.put(threshold.getIndicator(), threshold));
         }
         return effective.values().stream()
-                .filter(t -> MVP_INDICATORS.contains(t.getIndicator()))
+                .filter(threshold -> MVP_INDICATORS.contains(threshold.getIndicator()))
                 .map(ThresholdResponse::from)
                 .toList();
     }
@@ -62,6 +59,7 @@ public class ThresholdController {
         if (farmId == null) {
             throw new BadRequestException("You must belong to a farm to edit thresholds");
         }
+
         ThresholdConfig threshold = thresholdRepository.findById(id)
                 .orElseThrow(() -> new NotFoundException("Threshold " + id + " not found"));
         if (!MVP_INDICATORS.contains(threshold.getIndicator())) {
@@ -69,25 +67,20 @@ public class ThresholdController {
         }
         validateIndicatorRange(threshold.getIndicator(), request);
 
-        // Editing a global default → copy-on-write a farm-specific override (reusing one if it
-        // already exists for this indicator) so the shared default is never mutated.
+        ThresholdConfig target;
         if (threshold.getFarmId() == null) {
-            ThresholdConfig farmRow = thresholdRepository
-                    .findByFarmIdAndIndicator(farmId, threshold.getIndicator())
+            target = thresholdRepository.findByFarmIdAndIndicator(farmId, threshold.getIndicator())
                     .orElseGet(() -> new ThresholdConfig(
                             farmId, threshold.getIndicator(), request.minValue(), request.maxValue()));
-            farmRow.setMinValue(request.minValue());
-            farmRow.setMaxValue(request.maxValue());
-            return ThresholdResponse.from(thresholdRepository.save(farmRow));
-        }
-
-        // Editing an existing farm row → it must belong to the caller's farm.
-        if (!threshold.getFarmId().equals(farmId)) {
+        } else if (threshold.getFarmId().equals(farmId)) {
+            target = threshold;
+        } else {
             throw new BadRequestException("Cannot edit a threshold outside your farm");
         }
-        threshold.setMinValue(request.minValue());
-        threshold.setMaxValue(request.maxValue());
-        return ThresholdResponse.from(thresholdRepository.save(threshold));
+
+        target.setMinValue(request.minValue());
+        target.setMaxValue(request.maxValue());
+        return ThresholdResponse.from(thresholdRepository.save(target));
     }
 
     private static void validateCommonRange(UpdateThresholdRequest request) {
@@ -107,11 +100,9 @@ public class ThresholdController {
     }
 
     private static void validateIndicatorRange(String indicator, UpdateThresholdRequest request) {
-        if ("BHI".equals(indicator) || "BSI".equals(indicator)) {
-            if (request.minValue() > 100 || request.maxValue() > 100) {
-                throw new BadRequestException(indicator + " thresholds must be between 0 and 100");
-            }
+        if (("BHI".equals(indicator) || "BSI".equals(indicator))
+                && (request.minValue() > 100 || request.maxValue() > 100)) {
+            throw new BadRequestException(indicator + " thresholds must be between 0 and 100");
         }
-        // WFR has no upper bound; the common non-negative rule still applies.
     }
 }

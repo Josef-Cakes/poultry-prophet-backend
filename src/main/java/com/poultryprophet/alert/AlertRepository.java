@@ -14,11 +14,11 @@ public interface AlertRepository extends JpaRepository<Alert, Long> {
 
     List<Alert> findByBatchIdAndAcknowledgedAtIsNullOrderByCreatedAtDesc(Long batchId);
 
-        List<Alert> findByBatchIdAndAcknowledgedAtIsNullOrderByCreatedAtDesc(Long batchId, Pageable pageable);
+    List<Alert> findByBatchIdAndAcknowledgedAtIsNullOrderByCreatedAtDesc(Long batchId, Pageable pageable);
 
-        List<Alert> findByBatchIdOrderByCreatedAtDesc(Long batchId, Pageable pageable);
+    List<Alert> findByBatchIdOrderByCreatedAtDesc(Long batchId, Pageable pageable);
 
-        List<Alert> findByBatchIdAndCreatedAtBetweenOrderByCreatedAtAsc(
+    List<Alert> findByBatchIdAndCreatedAtBetweenOrderByCreatedAtAsc(
             Long batchId, Instant from, Instant to);
 
     // Farm-wide views (across every batch) backing the notifications centre.

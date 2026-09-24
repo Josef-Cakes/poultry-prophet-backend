@@ -17,13 +17,14 @@ public class Farm {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    /** Null until the manager completes farm setup; drives the onboarding banner. */
     @Column
     private String name;
 
     @Column
     private String location;
 
-    @Column(columnDefinition = "text")
+    @Column(length = 1000)
     private String description;
 
     @Column(nullable = false, updatable = false)

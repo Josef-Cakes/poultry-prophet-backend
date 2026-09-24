@@ -2,6 +2,15 @@ spring:
   application:
     name: poultry-prophet-backend
 
+  # Keep local development predictable when DevTools is present.
+  devtools:
+    restart:
+      enabled: false
+
+  # Load optional local settings from the git-ignored .env file.
+  config:
+    import: optional:file:.env[.properties]
+
   # Supply database credentials through the deployment environment. No
   # production-capable credential may be committed or used as a fallback.
   datasource:
@@ -29,8 +38,6 @@ spring:
 server:
   port: ${PORT:${SERVER_PORT:8080}}
 
-# Optional Render self-ping. Set APP_RENDER_URL in the deployed service to
-# keep a free instance warm; leaving it unset disables the scheduler action.
 app:
   time-zone: ${APP_TIME_ZONE:Asia/Manila}
   release:
@@ -40,7 +47,6 @@ app:
     environment: ${APP_ENVIRONMENT:local}
     frontend-version: ${APP_FRONTEND_VERSION:0.1.0-validation}
   legacy:
-    # Production stays fail-closed. Enable only for a separately approved, owner-reviewed repair.
     allow-mortality-reconciliation: ${APP_ALLOW_LEGACY_MORTALITY_RECONCILIATION:false}
   render:
     url: ${APP_RENDER_URL:}
@@ -48,56 +54,43 @@ app:
     initial-delay-ms: ${APP_KEEP_ALIVE_INITIAL_DELAY_MS:60000}
     fixed-rate-ms: ${APP_KEEP_ALIVE_FIXED_RATE_MS:600000}
 
-# Application-specific configuration.
 poultry:
   security:
     # Required: Base64-encoded secret of at least 256 bits (32 bytes).
     jwt-secret: ${JWT_SECRET}
-    jwt-expiration-ms: ${JWT_EXPIRATION_MS:86400000} # 24h
+    jwt-expiration-ms: ${JWT_EXPIRATION_MS:86400000}
     allowed-origins: ${APP_ALLOWED_ORIGINS:http://localhost:3000}
   analytics:
-    # Composite BHI weights (configuration-driven, per SDD 2.1). Normalised internally.
     weights:
       temperature: 0.30
       mortality: 0.35
       feed: 0.20
       water: 0.15
-    # Recent window (days) used to compute intake deviations and trends.
     window-days: 14
-    # Stage target dry-bulb temperatures (deg C). Provisional, per published poultry ranges.
     stage-target-temp:
       brooding: 33.0
       ranging: 28.0
       pre-conditioning: 26.0
       maintenance: 26.0
       conditioning: 24.0
-  # Conditioning Readiness scoring (Blueprint section 6). All weights/thresholds are
-  # documented, adjustable starting values - NOT established facts. Normalised internally.
   scoring:
-    # Composite CRS weights: brooding health + growth lead; health history + behaviour support.
     crs-weights:
       brooding-health: 0.30
       growth: 0.30
       health-history: 0.20
       behavioural: 0.20
-    # Brooding Health Index sub-weights (mortality is the strongest literature-backed signal).
     bhi-weights:
       mortality: 0.50
       intake: 0.30
       temperature: 0.20
-    # Cumulative brooding mortality band: <=1% scores 100, >=5% scores 0, linear between.
     mortality-best-pct: 1.0
     mortality-worst-pct: 5.0
-    # Growth: each 1% deviation from the expected weight curve costs this many points.
     growth-penalty-per-pct: 2.0
-    # Health history deductions per logged event severity (start at 100, subtract).
     health-deduction:
       routine: 0.0
       minor: 5.0
       moderate: 15.0
       major: 30.0
-    # Expected ranging weight curve (grams by age in weeks). Provisional game fowl ranges;
-    # linear interpolation between points. Suggested month-5 advancement cut-line on CRS.
     expected-weight:
       - { week: 4, grams: 300.0 }
       - { week: 8, grams: 700.0 }
