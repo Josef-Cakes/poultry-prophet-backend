@@ -1,8 +1,7 @@
 package com.poultryprophet.alert;
 
-import com.poultryprophet.alert.dto.AcknowledgeRequest;
-import com.poultryprophet.alert.dto.AlertResponse;
-import com.poultryprophet.security.CustomUserDetails;
+import java.util.List;
+
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -13,7 +12,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.List;
+import com.poultryprophet.alert.dto.AcknowledgeRequest;
+import com.poultryprophet.alert.dto.AlertResponse;
+import com.poultryprophet.security.CustomUserDetails;
 
 @RestController
 @RequestMapping("/api")
@@ -38,14 +39,6 @@ public class AlertController {
                                     @RequestParam(defaultValue = "50") int limit,
                                     @AuthenticationPrincipal CustomUserDetails principal) {
         return alertService.list(batchId, principal.getFarmId(), activeOnly, limit);
-    }
-
-    /** Farm-wide notifications centre: alerts across every batch on the caller's farm. */
-    @GetMapping("/alerts")
-    public List<AlertResponse> listFarm(@RequestParam(defaultValue = "true") boolean activeOnly,
-                                        @RequestParam(defaultValue = "100") int limit,
-                                        @AuthenticationPrincipal CustomUserDetails principal) {
-        return alertService.listForFarm(principal.getFarmId(), activeOnly, limit);
     }
 
     @PostMapping("/alerts/{id}/acknowledge")
