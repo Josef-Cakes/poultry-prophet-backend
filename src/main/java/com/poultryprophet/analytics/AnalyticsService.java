@@ -17,6 +17,7 @@ import java.util.List;
 public class AnalyticsService {
 
     private static final double BROODING_TARGET_TEMP_C = 33.0;
+    public static final String FORMULA_VERSION = "RULE_BASED_BHI_BSI_WFR_V2";
 
     private final AnalyticsProperties props;
 
@@ -32,11 +33,34 @@ public class AnalyticsService {
         if (recentDesc == null || recentDesc.isEmpty()) {
             return null;
         }
-        double bhi = computeBhi(recentDesc, batch);
-        Double wfr = computeWfr(recentDesc.get(0));
+        DailyRecord latest = recentDesc.get(0);
+        double target = props.targetTempFor(batch.getStage().getName());
+        double tempScore = round1(clamp(100.0 - Math.abs(latest.getTemperatureC() - target) * 8.0));
+        double mortalityScore = mortalityScore(latest, batch);
+        Double feedScore = deviationScore(latest.getFeedIntakeG(), averageFeedExcludingLatest(recentDesc));
+        Double waterScore = deviationScore(latest.getWaterIntakeMl(), averageWaterExcludingLatest(recentDesc));
+        boolean sufficientData = feedScore != null && waterScore != null;
+        Double bhi = sufficientData ? weightedScore(tempScore, mortalityScore, feedScore, waterScore) : null;
+        Double wfr = computeWfr(latest);
         Double bsi = batch.isBrooding() ? computeBsi(recentDesc, batch) : null;
-        double readiness = computeReadiness(bhi);
-        return new IndicatorResult(bhi, bsi, wfr, readiness);
+        AnalyticsProperties.Weights w = props.getWeights();
+        double totalWeight = w.total() == 0 ? 1.0 : w.total();
+        return new IndicatorResult(
+                bhi,
+                bsi,
+                wfr,
+                null,
+                tempScore,
+                mortalityScore,
+                feedScore,
+                waterScore,
+                sufficientData ? contribution(tempScore, w.getTemperature(), totalWeight) : null,
+                sufficientData ? contribution(mortalityScore, w.getMortality(), totalWeight) : null,
+                sufficientData ? contribution(feedScore, w.getFeed(), totalWeight) : null,
+                sufficientData ? contribution(waterScore, w.getWater(), totalWeight) : null,
+                sufficientData,
+                sufficientData ? null : "BHI requires at least one prior positive feed and water observation.",
+                FORMULA_VERSION);
     }
 
     /** Weighted composite of normalised temperature, mortality, feed and water sub-scores (0-100). */
@@ -50,16 +74,14 @@ public class AnalyticsService {
         double dailyMortalityRate = latest.getMortalityCount() / population;
         double mortalityScore = clamp(100.0 - dailyMortalityRate * 10_000.0);
 
-        double feedScore = deviationScore(latest.getFeedIntakeG(), averageFeedExcludingLatest(recentDesc));
-        double waterScore = deviationScore(latest.getWaterIntakeMl(), averageWaterExcludingLatest(recentDesc));
+        Double feedScore = deviationScore(latest.getFeedIntakeG(), averageFeedExcludingLatest(recentDesc));
+        Double waterScore = deviationScore(latest.getWaterIntakeMl(), averageWaterExcludingLatest(recentDesc));
+        if (feedScore == null || waterScore == null) {
+            return 0.0;
+        }
 
         AnalyticsProperties.Weights w = props.getWeights();
-        double totalWeight = w.total() == 0 ? 1.0 : w.total();
-        double bhi = (tempScore * w.getTemperature()
-                + mortalityScore * w.getMortality()
-                + feedScore * w.getFeed()
-                + waterScore * w.getWater()) / totalWeight;
-        return round1(clamp(bhi));
+        return weightedScore(tempScore, mortalityScore, feedScore, waterScore);
     }
 
     /** Brooding-stage stress (0-100, higher = more stress). Provisional heuristic. */
@@ -74,7 +96,7 @@ public class AnalyticsService {
 
     /** Water-to-feed ratio for the latest day; null (flagged) when feed intake is zero. */
     public Double computeWfr(DailyRecord latest) {
-        if (latest.getFeedIntakeG() <= 0.0) {
+        if (latest.getFeedIntakeG() == null || latest.getWaterIntakeMl() == null || latest.getFeedIntakeG() <= 0.0) {
             return null;
         }
         return round2(latest.getWaterIntakeMl() / latest.getFeedIntakeG());
@@ -91,9 +113,10 @@ public class AnalyticsService {
         }
         double sum = 0.0;
         for (int i = 1; i < recentDesc.size(); i++) {
-            sum += recentDesc.get(i).getFeedIntakeG();
+            Double value = recentDesc.get(i).getFeedIntakeG();
+            if (value != null) sum += value;
         }
-        return sum / (recentDesc.size() - 1);
+        return sum == 0.0 ? 0.0 : sum / Math.max(1, recentDesc.subList(1, recentDesc.size()).stream().filter(r -> r.getFeedIntakeG() != null).count());
     }
 
     private double averageWaterExcludingLatest(List<DailyRecord> recentDesc) {
@@ -102,18 +125,38 @@ public class AnalyticsService {
         }
         double sum = 0.0;
         for (int i = 1; i < recentDesc.size(); i++) {
-            sum += recentDesc.get(i).getWaterIntakeMl();
+            Double value = recentDesc.get(i).getWaterIntakeMl();
+            if (value != null) sum += value;
         }
-        return sum / (recentDesc.size() - 1);
+        return sum == 0.0 ? 0.0 : sum / Math.max(1, recentDesc.subList(1, recentDesc.size()).stream().filter(r -> r.getWaterIntakeMl() != null).count());
     }
 
-    /** No history (avg <= 0) is treated as neutral (100). Otherwise penalise relative deviation. */
-    private double deviationScore(double current, double average) {
-        if (average <= 0.0) {
-            return 100.0;
+    /** No history is insufficient data, never a fabricated perfect score. */
+    private Double deviationScore(Double current, double average) {
+        if (current == null || average <= 0.0) {
+            return null;
         }
         double ratio = Math.abs(current - average) / average;
         return clamp(100.0 - ratio * 100.0);
+    }
+
+    private double weightedScore(double temperatureScore, double mortalityScore,
+                                 double feedScore, double waterScore) {
+        AnalyticsProperties.Weights w = props.getWeights();
+        double totalWeight = w.total() == 0 ? 1.0 : w.total();
+        return round1(clamp((temperatureScore * w.getTemperature()
+                + mortalityScore * w.getMortality()
+                + feedScore * w.getFeed()
+                + waterScore * w.getWater()) / totalWeight));
+    }
+
+    private double contribution(double score, double weight, double totalWeight) {
+        return round1(score * weight / totalWeight);
+    }
+
+    private double mortalityScore(DailyRecord latest, Batch batch) {
+        double population = Math.max(1.0, batch.getCurrentPopulation());
+        return round1(clamp(100.0 - (latest.getMortalityCount() / population) * 10_000.0));
     }
 
     private boolean hasStressSignals(String notes) {

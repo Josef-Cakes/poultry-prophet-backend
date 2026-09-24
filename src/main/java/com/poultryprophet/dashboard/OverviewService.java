@@ -2,8 +2,6 @@ package com.poultryprophet.dashboard;
 
 import com.poultryprophet.alert.AlertRepository;
 import com.poultryprophet.alert.dto.AlertResponse;
-import com.poultryprophet.analytics.IndicatorRepository;
-import com.poultryprophet.analytics.dto.IndicatorResponse;
 import com.poultryprophet.batch.Batch;
 import com.poultryprophet.batch.BatchHandlerAssignmentRepository;
 import com.poultryprophet.batch.BatchService;
@@ -25,18 +23,15 @@ public class OverviewService {
 
     private final BatchService batchService;
     private final BatchHandlerAssignmentRepository assignmentRepository;
-    private final IndicatorRepository indicatorRepository;
     private final DailyRecordRepository recordRepository;
     private final AlertRepository alertRepository;
 
     public OverviewService(BatchService batchService,
                            BatchHandlerAssignmentRepository assignmentRepository,
-                           IndicatorRepository indicatorRepository,
                            DailyRecordRepository recordRepository,
                            AlertRepository alertRepository) {
         this.batchService = batchService;
         this.assignmentRepository = assignmentRepository;
-        this.indicatorRepository = indicatorRepository;
         this.recordRepository = recordRepository;
         this.alertRepository = alertRepository;
     }
@@ -45,13 +40,10 @@ public class OverviewService {
     public BatchOverviewResponse getOverview(Long batchId, Long farmId) {
         Batch batch = batchService.requireBatch(batchId, farmId);
 
+        BatchService.StageView stageView = batchService.resolveStage(batch);
         BatchResponse batchResponse = BatchResponse.from(
-                batch, assignmentRepository.findHandlerUserIdsByBatchId(batchId));
-
-        IndicatorResponse latestIndicator = indicatorRepository
-                .findFirstByBatchIdOrderByComputedAtDesc(batchId)
-                .map(IndicatorResponse::from)
-                .orElse(null);
+                batch, assignmentRepository.findHandlerUserIdsByBatchId(batchId),
+                stageView.stage(), stageView.auto());
 
         List<DailyRecordResponse> recentRecords = recordRepository
                 .findByBatchIdOrderByRecordDateDesc(batchId, PageRequest.of(0, RECENT_RECORD_LIMIT))
@@ -62,9 +54,13 @@ public class OverviewService {
         List<AlertResponse> activeAlerts = alertRepository
                 .findByBatchIdAndAcknowledgedAtIsNullOrderByCreatedAtDesc(batchId)
                 .stream()
+                .filter(alert -> alert.getIndicatorType() == null
+                        || !List.of("BHI", "BSI", "WFR", "CRS").contains(alert.getIndicatorType()))
                 .map(AlertResponse::from)
                 .toList();
 
-        return new BatchOverviewResponse(batchResponse, latestIndicator, recentRecords, activeAlerts);
+        // The nullable latestIndicator field remains for API compatibility. Active dashboard
+        // decisions now use the Selection Review preview and factual event data.
+        return new BatchOverviewResponse(batchResponse, null, recentRecords, activeAlerts);
     }
 }

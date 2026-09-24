@@ -44,11 +44,25 @@ public class DailyRecord {
     @Column(nullable = false)
     private int mortalityCount;
 
-    @Column(nullable = false)
-    private double feedIntakeG;
+    /** Optional: farms may record feed qualitatively when no scale is available. */
+    @Column
+    private Double feedIntakeG;
 
-    @Column(nullable = false)
-    private double waterIntakeMl;
+    /** Optional: water use is often estimated rather than metered. */
+    @Column
+    private Double waterIntakeMl;
+
+    @Enumerated(EnumType.STRING)
+    @Column
+    private ObservationQuality temperatureQuality = ObservationQuality.UNKNOWN;
+
+    @Enumerated(EnumType.STRING)
+    @Column
+    private ObservationQuality feedQuality = ObservationQuality.UNKNOWN;
+
+    @Enumerated(EnumType.STRING)
+    @Column
+    private ObservationQuality waterQuality = ObservationQuality.UNKNOWN;
 
     @Column(columnDefinition = "text")
     private String behaviorNotes;
@@ -112,20 +126,44 @@ public class DailyRecord {
         this.mortalityCount = mortalityCount;
     }
 
-    public double getFeedIntakeG() {
+    public Double getFeedIntakeG() {
         return feedIntakeG;
     }
 
-    public void setFeedIntakeG(double feedIntakeG) {
+    public void setFeedIntakeG(Double feedIntakeG) {
         this.feedIntakeG = feedIntakeG;
     }
 
-    public double getWaterIntakeMl() {
+    public Double getWaterIntakeMl() {
         return waterIntakeMl;
     }
 
-    public void setWaterIntakeMl(double waterIntakeMl) {
+    public void setWaterIntakeMl(Double waterIntakeMl) {
         this.waterIntakeMl = waterIntakeMl;
+    }
+
+    public ObservationQuality getTemperatureQuality() {
+        return temperatureQuality == null ? ObservationQuality.UNKNOWN : temperatureQuality;
+    }
+
+    public void setTemperatureQuality(ObservationQuality temperatureQuality) {
+        this.temperatureQuality = temperatureQuality == null ? ObservationQuality.UNKNOWN : temperatureQuality;
+    }
+
+    public ObservationQuality getFeedQuality() {
+        return feedQuality == null ? ObservationQuality.UNKNOWN : feedQuality;
+    }
+
+    public void setFeedQuality(ObservationQuality feedQuality) {
+        this.feedQuality = feedQuality == null ? ObservationQuality.UNKNOWN : feedQuality;
+    }
+
+    public ObservationQuality getWaterQuality() {
+        return waterQuality == null ? ObservationQuality.UNKNOWN : waterQuality;
+    }
+
+    public void setWaterQuality(ObservationQuality waterQuality) {
+        this.waterQuality = waterQuality == null ? ObservationQuality.UNKNOWN : waterQuality;
     }
 
     public String getBehaviorNotes() {

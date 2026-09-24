@@ -11,7 +11,9 @@ public record CreateBatchRequest(
         @NotBlank String name,
         @NotNull @Min(1) Integer initialPopulation,
         @NotNull LocalDate startDate,
-        @NotNull Long stageId,
+        // Stage is now auto-derived from the start/hatch date, so this is optional and ignored.
+        // Retained for backwards compatibility with older clients.
+        Long stageId,
         // Blueprint 5.2/5.3: descriptive metadata. Bloodline is collected but NOT scored.
         String bloodline,
         String source,

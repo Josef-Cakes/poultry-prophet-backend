@@ -1,6 +1,8 @@
 package com.poultryprophet.sync;
 
 import com.poultryprophet.batch.BatchService;
+import com.poultryprophet.batch.Batch;
+import com.poultryprophet.common.DateValidationService;
 import com.poultryprophet.record.DailyRecord;
 import com.poultryprophet.record.DailyRecordRepository;
 import com.poultryprophet.record.DailyRecordService;
@@ -28,17 +30,20 @@ public class SyncService {
     private final ConflictResolver conflictResolver;
     private final SyncAttemptRepository syncAttemptRepository;
     private final BatchService batchService;
+    private final DateValidationService dateValidation;
 
     public SyncService(DailyRecordService recordService,
                        DailyRecordRepository recordRepository,
                        ConflictResolver conflictResolver,
                        SyncAttemptRepository syncAttemptRepository,
-                       BatchService batchService) {
+                       BatchService batchService,
+                       DateValidationService dateValidation) {
         this.recordService = recordService;
         this.recordRepository = recordRepository;
         this.conflictResolver = conflictResolver;
         this.syncAttemptRepository = syncAttemptRepository;
         this.batchService = batchService;
+        this.dateValidation = dateValidation;
     }
 
     public SyncBatchResponse sync(SyncBatchRequest request, Long farmId, Long handlerId) {
@@ -50,7 +55,8 @@ public class SyncService {
         for (SyncItemRequest item : request.records()) {
             try {
                 // Validates the batch belongs to the syncing handler's farm.
-                batchService.requireBatch(item.batchId(), farmId);
+                Batch batch = batchService.requireBatch(item.batchId(), farmId);
+                dateValidation.validate(item.recordDate(), batch.getStartDate());
 
                 DailyRecord existing = recordRepository
                         .findByBatchIdAndRecordDate(item.batchId(), item.recordDate())
@@ -66,8 +72,14 @@ public class SyncService {
                     results.add(SyncItemResult.synced(item.clientId(), saved.getId(), type));
                     synced++;
                 } else if (type == ConflictType.IDENTICAL) {
-                    log(existing.getId(), 200, type.name());
-                    results.add(SyncItemResult.synced(item.clientId(), existing.getId(), type));
+                    // Re-run the idempotent upsert. Legacy mortality reconciliation is
+                    // fail-closed unless explicitly enabled for a reviewed repair.
+                    DailyRecord canonical = recordService.upsert(item.batchId(), farmId, handlerId,
+                            item.recordDate(), item.temperatureC(), item.mortalityCount(),
+                            item.feedIntakeG(), item.waterIntakeMl(), item.behaviorNotes(),
+                            item.updatedAt(), SyncStatus.SYNCED);
+                    log(canonical.getId(), 200, type.name());
+                    results.add(SyncItemResult.synced(item.clientId(), canonical.getId(), type));
                     synced++;
                 } else { // SERVER_NEWER
                     log(existing.getId(), 409, type.name());

@@ -6,6 +6,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 
 import java.time.LocalDate;
+import java.util.UUID;
 
 public record CreateBatchEventRequest(
         LocalDate eventDate,
@@ -14,5 +15,19 @@ public record CreateBatchEventRequest(
         String severityLabel,
         @Min(0) int affectedCount,
         String details,
-        String tags
-) {}
+        String tags,
+        @NotNull UUID operationId,
+        Integer populationDelta
+) {
+    /** Compatibility constructor for existing unit fixtures; real clients must send operationId. */
+    public CreateBatchEventRequest(LocalDate eventDate,
+                                   EventType eventType,
+                                   String title,
+                                   String severityLabel,
+                                   int affectedCount,
+                                   String details,
+                                   String tags) {
+        this(eventDate, eventType, title, severityLabel, affectedCount, details, tags,
+                UUID.randomUUID(), null);
+    }
+}

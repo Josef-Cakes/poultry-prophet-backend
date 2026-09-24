@@ -1,6 +1,7 @@
 package com.poultryprophet.invite;
 
 import com.poultryprophet.common.BadRequestException;
+import com.poultryprophet.farm.FarmRepository;
 import com.poultryprophet.user.Role;
 import com.poultryprophet.user.User;
 import com.poultryprophet.user.UserRepository;
@@ -17,14 +18,18 @@ public class InviteService {
 
     private final HandlerInviteRepository inviteRepository;
     private final UserRepository userRepository;
+    private final FarmRepository farmRepository;
 
-    public InviteService(HandlerInviteRepository inviteRepository, UserRepository userRepository) {
+    public InviteService(HandlerInviteRepository inviteRepository, UserRepository userRepository,
+                         FarmRepository farmRepository) {
         this.inviteRepository = inviteRepository;
         this.userRepository = userRepository;
+        this.farmRepository = farmRepository;
     }
 
     @Transactional
     public InviteResponse createHandlerInvite(String email, Long farmId, int expiresInDays) {
+        requireValidFarm(farmId);
         // The invitee must already be a registered handler: acceptance is gated to
         // the HANDLER role and matches on email, so an invite to a non-existent or
         // non-handler address could never be accepted.
@@ -33,8 +38,8 @@ public class InviteService {
         if (invitee.getRole() != Role.HANDLER) {
             throw new BadRequestException("Only handler accounts can be invited to a farm");
         }
-        if (farmId.equals(invitee.getFarmId())) {
-            throw new BadRequestException("This handler is already a member of your farm");
+        if (invitee.getFarmId() != null) {
+            throw new BadRequestException("This handler is already assigned to a farm");
         }
 
         HandlerInvite invite = new HandlerInvite();
@@ -82,8 +87,8 @@ public class InviteService {
     }
 
     @Transactional
-    public Long acceptInvite(String token, String email) {
-        HandlerInvite invite = inviteRepository.findByToken(token)
+    public User acceptInvite(String token, String email) {
+        HandlerInvite invite = inviteRepository.findByTokenForUpdate(token)
                 .orElseThrow(() -> new BadRequestException("Invalid invite token"));
 
         if (!invite.getEmail().equalsIgnoreCase(email)) {
@@ -98,12 +103,29 @@ public class InviteService {
             throw new BadRequestException("Invite has been declined");
         }
 
-        if (invite.getExpiresAt().isBefore(Instant.now())) {
+        if (!invite.getExpiresAt().isAfter(Instant.now())) {
             throw new BadRequestException("Invite token has expired");
         }
 
+        User user = userRepository.findByEmailForUpdate(email)
+                .orElseThrow(() -> new BadRequestException("User not found"));
+        if (user.getRole() != Role.HANDLER) {
+            throw new BadRequestException("Only handler accounts can accept farm invitations");
+        }
+        if (user.getFarmId() != null) {
+            throw new BadRequestException("This handler is already assigned to a farm");
+        }
+        requireValidFarm(invite.getFarmId());
+
         invite.setUsedAt(Instant.now());
         inviteRepository.save(invite);
-        return invite.getFarmId();
+        user.setFarmId(invite.getFarmId());
+        return userRepository.save(user);
+    }
+
+    private void requireValidFarm(Long farmId) {
+        if (farmId == null || !farmRepository.existsById(farmId)) {
+            throw new BadRequestException("Invitation target farm does not exist");
+        }
     }
 }

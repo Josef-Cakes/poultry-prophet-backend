@@ -1,14 +1,18 @@
 package com.poultryprophet.security;
 
-import com.poultryprophet.config.SecurityProperties;
-import com.poultryprophet.user.User;
-import io.jsonwebtoken.Claims;
-import io.jsonwebtoken.Jwts;
-import io.jsonwebtoken.security.Keys;
-import org.springframework.stereotype.Service;
+import java.util.Date;
 
 import javax.crypto.SecretKey;
-import java.util.Date;
+
+import org.springframework.stereotype.Service;
+
+import com.poultryprophet.config.SecurityProperties;
+import com.poultryprophet.user.User;
+
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.io.Decoders;
+import io.jsonwebtoken.security.Keys;
 
 @Service
 public class JwtService {
@@ -17,7 +21,7 @@ public class JwtService {
     private final long expirationMs;
 
     public JwtService(SecurityProperties properties) {
-        this.key = Keys.hmacShaKeyFor(properties.getJwtSecret().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        this.key = Keys.hmacShaKeyFor(Decoders.BASE64.decode(properties.getJwtSecret()));
         this.expirationMs = properties.getJwtExpirationMs();
     }
 

@@ -27,6 +27,7 @@ public class UserController {
     }
 
     @GetMapping
+    @PreAuthorize("hasRole('MANAGER')")
     public List<HandlerResponse> listHandlers(@AuthenticationPrincipal CustomUserDetails principal) {
         return userService.listHandlers(principal.getFarmId());
     }

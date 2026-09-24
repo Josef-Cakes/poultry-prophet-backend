@@ -2,6 +2,7 @@ package com.poultryprophet.alert;
 
 import com.poultryprophet.analytics.Indicator;
 import com.poultryprophet.batch.Batch;
+import com.poultryprophet.event.BatchEvent;
 import com.poultryprophet.user.User;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -15,13 +16,16 @@ import jakarta.persistence.Index;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.OneToOne;
 
 import java.time.Instant;
+import java.time.LocalDate;
 
 @Entity
 @Table(name = "alert", indexes = {
         @Index(name = "idx_alert_batch_created", columnList = "batch_id, created_at"),
-        @Index(name = "idx_alert_severity_ack", columnList = "severity, acknowledged_at")
+        @Index(name = "idx_alert_severity_ack", columnList = "severity, acknowledged_at"),
+        @Index(name = "idx_alert_source_event", columnList = "source_event_id", unique = true)
 })
 public class Alert {
 
@@ -39,6 +43,26 @@ public class Alert {
 
     @Column(nullable = false)
     private String indicatorType;
+
+    /** Canonical mortality source. A unique link makes direct alerts idempotent. */
+    @OneToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "source_event_id", unique = true)
+    private BatchEvent sourceEvent;
+
+    @Column(name = "batch_name")
+    private String batchName;
+
+    @Column(name = "handler_name")
+    private String handlerName;
+
+    @Column(name = "death_count")
+    private Integer deathCount;
+
+    @Column(name = "cause")
+    private String cause;
+
+    @Column(name = "occurrence_date")
+    private LocalDate occurrenceDate;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
@@ -90,6 +114,54 @@ public class Alert {
 
     public void setIndicatorType(String indicatorType) {
         this.indicatorType = indicatorType;
+    }
+
+    public BatchEvent getSourceEvent() {
+        return sourceEvent;
+    }
+
+    public void setSourceEvent(BatchEvent sourceEvent) {
+        this.sourceEvent = sourceEvent;
+    }
+
+    public String getBatchName() {
+        return batchName;
+    }
+
+    public void setBatchName(String batchName) {
+        this.batchName = batchName;
+    }
+
+    public String getHandlerName() {
+        return handlerName;
+    }
+
+    public void setHandlerName(String handlerName) {
+        this.handlerName = handlerName;
+    }
+
+    public Integer getDeathCount() {
+        return deathCount;
+    }
+
+    public void setDeathCount(Integer deathCount) {
+        this.deathCount = deathCount;
+    }
+
+    public String getCause() {
+        return cause;
+    }
+
+    public void setCause(String cause) {
+        this.cause = cause;
+    }
+
+    public LocalDate getOccurrenceDate() {
+        return occurrenceDate;
+    }
+
+    public void setOccurrenceDate(LocalDate occurrenceDate) {
+        this.occurrenceDate = occurrenceDate;
     }
 
     public Severity getSeverity() {

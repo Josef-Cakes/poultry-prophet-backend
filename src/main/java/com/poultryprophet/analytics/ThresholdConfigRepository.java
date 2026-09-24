@@ -13,7 +13,7 @@ public interface ThresholdConfigRepository extends JpaRepository<ThresholdConfig
 
     List<ThresholdConfig> findByFarmId(Long farmId);
 
-    /** The global default thresholds (farmId null) shared by every farm. */
+    /** Global default rows (farmId null) shared by every farm until overridden. */
     List<ThresholdConfig> findByFarmIdIsNull();
 
     /** Effective threshold for a farm/indicator, falling back to the global default. */

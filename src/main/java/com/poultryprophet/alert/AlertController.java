@@ -40,6 +40,14 @@ public class AlertController {
         return alertService.list(batchId, principal.getFarmId(), activeOnly, limit);
     }
 
+    /** Farm-wide notifications centre: alerts across every batch on the caller's farm. */
+    @GetMapping("/alerts")
+    public List<AlertResponse> listFarm(@RequestParam(defaultValue = "true") boolean activeOnly,
+                                        @RequestParam(defaultValue = "100") int limit,
+                                        @AuthenticationPrincipal CustomUserDetails principal) {
+        return alertService.listForFarm(principal.getFarmId(), activeOnly, limit);
+    }
+
     @PostMapping("/alerts/{id}/acknowledge")
     @PreAuthorize("hasRole('MANAGER')")
     public AlertResponse acknowledge(@PathVariable Long id,

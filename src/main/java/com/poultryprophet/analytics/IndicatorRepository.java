@@ -15,6 +15,10 @@ public interface IndicatorRepository extends JpaRepository<Indicator, Long> {
 
     Optional<Indicator> findFirstByBatchIdOrderByComputedAtDesc(Long batchId);
 
+    @Query("select i from Indicator i join fetch i.record r where i.batch.id = :batchId "
+            + "order by r.recordDate desc, i.id desc")
+    List<Indicator> findByBatchIdOrderByObservationDateDesc(@Param("batchId") Long batchId, Pageable pageable);
+
     List<Indicator> findByBatchIdOrderByComputedAtDesc(Long batchId, Pageable pageable);
 
     List<Indicator> findByBatchIdAndComputedAtBetweenOrderByComputedAtAsc(Long batchId,

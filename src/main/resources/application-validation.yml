@@ -1,0 +1,20 @@
+spring:
+  jpa:
+    hibernate:
+      # Validation-only bootstrap. Production must use a reviewed migration instead.
+      ddl-auto: update
+  sql:
+    init:
+      mode: always
+
+app:
+  release:
+    environment: validation
+    version: ${APP_VERSION:0.1.0-validation}
+    frontend-version: ${APP_FRONTEND_VERSION:0.1.0-validation}
+  legacy:
+    allow-mortality-reconciliation: false
+
+poultry:
+  security:
+    allowed-origins: ${APP_ALLOWED_ORIGINS:http://localhost:3000}

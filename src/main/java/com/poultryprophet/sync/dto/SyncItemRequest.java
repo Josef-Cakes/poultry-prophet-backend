@@ -12,9 +12,9 @@ public record SyncItemRequest(
         @NotNull Long batchId,
         @NotNull LocalDate recordDate,
         @NotNull Double temperatureC,
-        @NotNull @Min(0) Integer mortalityCount,
-        @NotNull Double feedIntakeG,
-        @NotNull Double waterIntakeMl,
+        @Min(0) Integer mortalityCount,
+        @jakarta.validation.constraints.DecimalMin("0.0") Double feedIntakeG,
+        @jakarta.validation.constraints.DecimalMin("0.0") Double waterIntakeMl,
         String behaviorNotes,
         @NotNull Instant updatedAt
 ) {

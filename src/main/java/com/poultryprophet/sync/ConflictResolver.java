@@ -30,9 +30,10 @@ public class ConflictResolver {
 
     private boolean isIdentical(DailyRecord existing, SyncItemRequest incoming) {
         return Double.compare(existing.getTemperatureC(), incoming.temperatureC()) == 0
-                && existing.getMortalityCount() == incoming.mortalityCount()
-                && Double.compare(existing.getFeedIntakeG(), incoming.feedIntakeG()) == 0
-                && Double.compare(existing.getWaterIntakeMl(), incoming.waterIntakeMl()) == 0
+                && existing.getMortalityCount() == (incoming.mortalityCount() == null
+                    ? 0 : incoming.mortalityCount())
+                && java.util.Objects.equals(existing.getFeedIntakeG(), incoming.feedIntakeG())
+                && java.util.Objects.equals(existing.getWaterIntakeMl(), incoming.waterIntakeMl())
                 && Objects.equals(normalize(existing.getBehaviorNotes()), normalize(incoming.behaviorNotes()));
     }
 

@@ -12,7 +12,8 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 
 @RestController
-@RequestMapping("/api/batches/{batchId}/indicators")
+/** Legacy score history; active UI uses Selection Review Report data instead. */
+@RequestMapping("/api/legacy/batches/{batchId}/indicators")
 public class IndicatorController {
 
     private final IndicatorQueryService indicatorQueryService;

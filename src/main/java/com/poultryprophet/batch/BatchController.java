@@ -2,7 +2,6 @@ package com.poultryprophet.batch;
 
 import com.poultryprophet.batch.dto.BatchResponse;
 import com.poultryprophet.batch.dto.BatchTrackingResponse;
-import com.poultryprophet.batch.dto.ChangeStageRequest;
 import com.poultryprophet.batch.dto.CreateBatchRequest;
 import com.poultryprophet.security.CustomUserDetails;
 import jakarta.validation.Valid;
@@ -16,6 +15,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -31,6 +31,7 @@ public class BatchController {
     }
 
     @PostMapping
+    @PreAuthorize("hasAnyRole('MANAGER', 'HANDLER')")
     public ResponseEntity<BatchResponse> create(@Valid @RequestBody CreateBatchRequest request,
                                                 @AuthenticationPrincipal CustomUserDetails principal) {
         BatchResponse response = batchService.create(request, principal.getFarmId());
@@ -38,8 +39,9 @@ public class BatchController {
     }
 
     @GetMapping
-    public List<BatchResponse> list(@AuthenticationPrincipal CustomUserDetails principal) {
-        return batchService.listForFarm(principal.getFarmId());
+    public List<BatchResponse> list(@RequestParam(defaultValue = "false") boolean archived,
+                                    @AuthenticationPrincipal CustomUserDetails principal) {
+        return batchService.listForFarm(principal.getFarmId(), archived);
     }
 
     @GetMapping("/{id}")
@@ -53,11 +55,17 @@ public class BatchController {
         return batchService.getTracking(id, principal.getFarmId());
     }
 
-    @PatchMapping("/{id}/stage")
+    @PatchMapping("/{id}/archive")
     @PreAuthorize("hasRole('MANAGER')")
-    public BatchResponse changeStage(@PathVariable Long id,
-                                     @Valid @RequestBody ChangeStageRequest request,
-                                     @AuthenticationPrincipal CustomUserDetails principal) {
-        return batchService.changeStage(id, principal.getFarmId(), request.stageId());
+    public BatchResponse archive(@PathVariable Long id,
+                                 @AuthenticationPrincipal CustomUserDetails principal) {
+        return batchService.archive(id, principal.getFarmId());
+    }
+
+    @PatchMapping("/{id}/restore")
+    @PreAuthorize("hasRole('MANAGER')")
+    public BatchResponse restore(@PathVariable Long id,
+                                 @AuthenticationPrincipal CustomUserDetails principal) {
+        return batchService.restore(id, principal.getFarmId());
     }
 }

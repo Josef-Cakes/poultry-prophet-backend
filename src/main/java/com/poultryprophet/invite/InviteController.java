@@ -2,10 +2,8 @@ package com.poultryprophet.invite;
 
 import com.poultryprophet.auth.AuthService;
 import com.poultryprophet.auth.dto.AuthResponse;
-import com.poultryprophet.common.BadRequestException;
 import com.poultryprophet.security.CustomUserDetails;
 import com.poultryprophet.user.User;
-import com.poultryprophet.user.UserRepository;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -25,14 +23,11 @@ import java.util.List;
 public class InviteController {
 
     private final InviteService inviteService;
-    private final UserRepository userRepository;
     private final AuthService authService;
 
     public InviteController(InviteService inviteService,
-                            UserRepository userRepository,
                             AuthService authService) {
         this.inviteService = inviteService;
-        this.userRepository = userRepository;
         this.authService = authService;
     }
 
@@ -63,11 +58,7 @@ public class InviteController {
     @PreAuthorize("hasRole('HANDLER')")
     public ResponseEntity<AuthResponse> accept(@PathVariable String token,
                                                @AuthenticationPrincipal CustomUserDetails principal) {
-        Long farmId = inviteService.acceptInvite(token, principal.getUsername());
-        User user = userRepository.findByEmail(principal.getUsername())
-                .orElseThrow(() -> new BadRequestException("User not found"));
-        user.setFarmId(farmId);
-        userRepository.save(user);
+        User user = inviteService.acceptInvite(token, principal.getUsername());
         return ResponseEntity.ok(authService.toResponse(user));
     }
 }
