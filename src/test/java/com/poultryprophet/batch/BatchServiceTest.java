@@ -58,7 +58,7 @@ class BatchServiceTest {
         stage.setId(1L);
         when(batchRepository.existsByFarmIdAndNameIgnoreCase(7L, "September flock"))
                 .thenReturn(false);
-        when(stageRepository.findById(1L)).thenReturn(Optional.of(stage));
+        when(stageRepository.findByNameIgnoreCase("brooding")).thenReturn(Optional.of(stage));
         when(batchRepository.save(any(Batch.class))).thenAnswer(invocation -> {
             Batch batch = invocation.getArgument(0);
             batch.setId(11L);
@@ -83,7 +83,7 @@ class BatchServiceTest {
         unassignedHandler.setFarmId(null);
         when(batchRepository.existsByFarmIdAndNameIgnoreCase(7L, "September flock"))
                 .thenReturn(false);
-        when(stageRepository.findById(1L)).thenReturn(Optional.of(stage));
+        when(stageRepository.findByNameIgnoreCase("brooding")).thenReturn(Optional.of(stage));
         when(userRepository.findById(33L)).thenReturn(Optional.of(unassignedHandler));
 
         CreateBatchRequest request = new CreateBatchRequest(

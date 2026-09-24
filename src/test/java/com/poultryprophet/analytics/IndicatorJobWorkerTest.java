@@ -1,6 +1,5 @@
 package com.poultryprophet.analytics;
 
-import com.poultryprophet.alert.AlertService;
 import com.poultryprophet.batch.Batch;
 import com.poultryprophet.batch.BatchRepository;
 import com.poultryprophet.config.AnalyticsProperties;
@@ -30,14 +29,13 @@ class IndicatorJobWorkerTest {
     @Mock private BatchRepository batchRepository;
     @Mock private IndicatorRepository indicatorRepository;
     @Mock private AnalyticsService analyticsService;
-    @Mock private AlertService alertService;
     @Mock private RealtimeNotificationService realtime;
 
     @Test
     void recomputesEveryObservationInChronologicalOrderAfterBackdatedWrite() {
         AnalyticsProperties properties = new AnalyticsProperties();
         IndicatorJobWorker worker = new IndicatorJobWorker(recordRepository, batchRepository,
-                indicatorRepository, analyticsService, alertService, realtime, properties);
+                indicatorRepository, analyticsService, realtime, properties);
         Batch batch = new Batch();
         batch.setId(10L);
         DailyRecord older = record(1L, "2026-09-12");
@@ -59,7 +57,6 @@ class IndicatorJobWorkerTest {
                 .containsExactly(LocalDate.of(2026, 9, 12));
         assertThat(windows.getAllValues().get(2)).extracting(DailyRecord::getRecordDate)
                 .containsExactly(LocalDate.of(2026, 9, 14), LocalDate.of(2026, 9, 13), LocalDate.of(2026, 9, 12));
-        verify(alertService).evaluate(any(Indicator.class));
         verify(realtime).publishIndicatorUpdated(any(Indicator.class));
     }
 

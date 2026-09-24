@@ -13,8 +13,8 @@ public record SyncItemRequest(
         @NotNull LocalDate recordDate,
         @NotNull Double temperatureC,
         @Min(0) Integer mortalityCount,
-        @NotNull Double feedIntakeG,
-        @NotNull Double waterIntakeMl,
+        @jakarta.validation.constraints.DecimalMin("0.0") Double feedIntakeG,
+        @jakarta.validation.constraints.DecimalMin("0.0") Double waterIntakeMl,
         String behaviorNotes,
         @NotNull Instant updatedAt
 ) {

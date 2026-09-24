@@ -19,7 +19,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.time.LocalDate;
 
 @RestController
-@RequestMapping("/api")
+@RequestMapping("/api/legacy")
 @PreAuthorize("hasRole('MANAGER')")
 public class ReportController {
 

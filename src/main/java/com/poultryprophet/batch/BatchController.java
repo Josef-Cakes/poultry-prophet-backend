@@ -2,7 +2,6 @@ package com.poultryprophet.batch;
 
 import com.poultryprophet.batch.dto.BatchResponse;
 import com.poultryprophet.batch.dto.BatchTrackingResponse;
-import com.poultryprophet.batch.dto.ChangeStageRequest;
 import com.poultryprophet.batch.dto.CreateBatchRequest;
 import com.poultryprophet.security.CustomUserDetails;
 import jakarta.validation.Valid;
@@ -54,22 +53,6 @@ public class BatchController {
     public BatchTrackingResponse getTracking(@PathVariable Long id,
                                              @AuthenticationPrincipal CustomUserDetails principal) {
         return batchService.getTracking(id, principal.getFarmId());
-    }
-
-    @PatchMapping("/{id}/stage")
-    @PreAuthorize("hasRole('MANAGER')")
-    public BatchResponse changeStage(@PathVariable Long id,
-                                     @Valid @RequestBody ChangeStageRequest request,
-                                     @AuthenticationPrincipal CustomUserDetails principal) {
-        return batchService.changeStage(id, principal.getFarmId(), request.stageId());
-    }
-
-    /** Clears a manual stage override so the batch's stage tracks its age again. */
-    @PatchMapping("/{id}/stage/auto")
-    @PreAuthorize("hasRole('MANAGER')")
-    public BatchResponse useAutoStage(@PathVariable Long id,
-                                      @AuthenticationPrincipal CustomUserDetails principal) {
-        return batchService.useAutoStage(id, principal.getFarmId());
     }
 
     @PatchMapping("/{id}/archive")

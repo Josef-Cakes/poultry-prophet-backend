@@ -150,7 +150,7 @@ public class AlertService {
         List<Alert> alerts = activeOnly
                 ? alertRepository.findByBatchIdAndAcknowledgedAtIsNullOrderByCreatedAtDesc(batchId, page)
                 : alertRepository.findByBatchIdOrderByCreatedAtDesc(batchId, page);
-        return alerts.stream().map(AlertResponse::from).toList();
+        return alerts.stream().filter(alert -> !isLegacyScoreAlert(alert)).map(AlertResponse::from).toList();
     }
 
     /** SDD 2.3: farm-wide feed across every batch, backing the notifications centre. */
@@ -160,7 +160,7 @@ public class AlertService {
         List<Alert> alerts = activeOnly
                 ? alertRepository.findByBatch_FarmIdAndAcknowledgedAtIsNullOrderByCreatedAtDesc(farmId, page)
                 : alertRepository.findByBatch_FarmIdOrderByCreatedAtDesc(farmId, page);
-        return alerts.stream().map(AlertResponse::from).toList();
+        return alerts.stream().filter(alert -> !isLegacyScoreAlert(alert)).map(AlertResponse::from).toList();
     }
 
     @Transactional
@@ -174,5 +174,13 @@ public class AlertService {
         alert.setAcknowledgedAt(Instant.now());
         alert.setAcknowledgmentNote(note);
         return AlertResponse.from(alertRepository.save(alert));
+    }
+
+    private boolean isLegacyScoreAlert(Alert alert) {
+        if (alert.getIndicatorType() == null) return false;
+        return switch (alert.getIndicatorType()) {
+            case "BHI", "BSI", "WFR", "CRS" -> true;
+            default -> false;
+        };
     }
 }

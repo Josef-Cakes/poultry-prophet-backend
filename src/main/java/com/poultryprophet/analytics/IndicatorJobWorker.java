@@ -1,6 +1,5 @@
 package com.poultryprophet.analytics;
 
-import com.poultryprophet.alert.AlertService;
 import com.poultryprophet.batch.Batch;
 import com.poultryprophet.batch.BatchRepository;
 import com.poultryprophet.config.AnalyticsProperties;
@@ -24,8 +23,9 @@ import java.util.List;
 /**
  * SDD 2.1 IndicatorJobWorker. Replaces the Node.js BullMQ worker: consumes
  * {@link RecordCreatedEvent} after the originating transaction commits, recomputes the
- * batch's indicators off the request thread, persists them, pushes a real-time update, and
- * hands the indicator to the alert engine.
+ * batch's legacy indicators off the request thread, persists them, and pushes a real-time update.
+ * Legacy score alerts are intentionally no longer generated; the active workflow uses factual
+ * event records and the Selection Review Report instead.
  */
 @Component
 public class IndicatorJobWorker {
@@ -34,7 +34,6 @@ public class IndicatorJobWorker {
     private final BatchRepository batchRepository;
     private final IndicatorRepository indicatorRepository;
     private final AnalyticsService analyticsService;
-    private final AlertService alertService;
     private final RealtimeNotificationService realtime;
     private final int windowDays;
 
@@ -42,14 +41,12 @@ public class IndicatorJobWorker {
                               BatchRepository batchRepository,
                               IndicatorRepository indicatorRepository,
                               AnalyticsService analyticsService,
-                              AlertService alertService,
                               RealtimeNotificationService realtime,
                               AnalyticsProperties props) {
         this.recordRepository = recordRepository;
         this.batchRepository = batchRepository;
         this.indicatorRepository = indicatorRepository;
         this.analyticsService = analyticsService;
-        this.alertService = alertService;
         this.realtime = realtime;
         this.windowDays = props.getWindowDays();
     }
@@ -66,7 +63,6 @@ public class IndicatorJobWorker {
                 .max((left, right) -> left.getRecord().getRecordDate().compareTo(right.getRecord().getRecordDate()))
                 .orElse(null);
         if (latest != null) {
-            alertService.evaluate(latest);
             realtime.publishIndicatorUpdated(latest);
         }
     }

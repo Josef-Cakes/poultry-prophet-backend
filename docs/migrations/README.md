@@ -39,3 +39,10 @@ bash scripts/apply-mortality-repair.sh
 
 Do not skip the backup, preview review, or approval environment variable. The migration has not
 been executed against Supabase as part of this change.
+
+## V5 selection-review snapshot metadata
+
+`src/main/resources/db/migration/V5__selection_review_snapshot_metadata.sql` adds nullable
+version, purpose, note, source-cutoff, and idempotency fields for the non-closing report
+snapshot workflow. Apply it only to the isolated validation database after review. It is not
+wired into application startup and was not applied to production as part of this change.

@@ -42,7 +42,29 @@ class AnalyticsServiceTest {
         assertThat(result.formulaVersion()).isEqualTo(AnalyticsService.FORMULA_VERSION);
     }
 
+    @Test
+    void treatsUnmeasuredFeedAndWaterAsMissingInsteadOfThrowingOrInventingValues() {
+        DailyRecord latest = record("2026-09-14", 33, null, null);
+        DailyRecord prior = record("2026-09-13", 33, 1_000, 1_800);
+
+        IndicatorResult result = service.compute(List.of(latest, prior), batch());
+
+        assertThat(result.bhi()).isNull();
+        assertThat(result.wfr()).isNull();
+        assertThat(result.sufficientData()).isFalse();
+    }
+
     private static DailyRecord record(String date, double temperature, double feed, double water) {
+        DailyRecord record = new DailyRecord();
+        record.setRecordDate(LocalDate.parse(date));
+        record.setTemperatureC(temperature);
+        record.setMortalityCount(0);
+        record.setFeedIntakeG(feed);
+        record.setWaterIntakeMl(water);
+        return record;
+    }
+
+    private static DailyRecord record(String date, double temperature, Double feed, Double water) {
         DailyRecord record = new DailyRecord();
         record.setRecordDate(LocalDate.parse(date));
         record.setTemperatureC(temperature);

@@ -98,30 +98,6 @@ public class BatchService {
         return toResponse(requireBatch(batchId, farmId));
     }
 
-    /**
-     * Pins a manual stage override, taking the batch off age-based auto-progression until the
-     * manager switches back to Auto. Used to advance/hold a batch out of step with its age.
-     */
-    @Transactional
-    public BatchResponse changeStage(Long batchId, Long farmId, Long stageId) {
-        Batch batch = requireBatch(batchId, farmId);
-        LifecycleStage stage = stageRepository.findById(stageId)
-                .orElseThrow(() -> new BadRequestException("Unknown lifecycle stage id " + stageId));
-        batch.setStage(stage);
-        batch.setStageManual(true);
-        batchRepository.save(batch);
-        return toResponse(batch);
-    }
-
-    /** Clears a manual override so the stage tracks the batch's age again. */
-    @Transactional
-    public BatchResponse useAutoStage(Long batchId, Long farmId) {
-        Batch batch = requireBatch(batchId, farmId);
-        batch.setStageManual(false);
-        batchRepository.save(batch);
-        return toResponse(batch);
-    }
-
     /** Retires a batch — hides it from the working dashboard list. Reversible via restore. */
     @Transactional
     public BatchResponse archive(Long batchId, Long farmId) {
@@ -176,18 +152,16 @@ public class BatchService {
                 .orElseThrow(() -> new NotFoundException("Batch " + batchId + " not found"));
     }
 
-    /** The effective stage to display and whether it was derived from age. */
+    /** The effective stage to display. Lifecycle stage is always derived from batch age. */
     public record StageView(LifecycleStage stage, boolean auto) {
     }
 
     /**
-     * Resolves the stage shown for a batch: the pinned manual override if set, otherwise the
-     * stage derived from the batch's current age. Shared with the dashboard overview.
+     * Resolves the stage shown for a batch from its current age. This is deliberately the only
+     * source of truth so a manager or handler cannot put a batch in an incorrect stage manually.
+     * Shared with the dashboard overview.
      */
     public StageView resolveStage(Batch batch) {
-        if (batch.isStageManual()) {
-            return new StageView(batch.getStage(), false);
-        }
         long days = daysElapsed(batch.getStartDate());
         LifecycleStage auto = stageRepository.findByNameIgnoreCase(autoStageName(days))
                 .orElse(batch.getStage()); // fall back to the stored stage if the seed is missing

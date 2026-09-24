@@ -14,9 +14,12 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-/** Blueprint Module 3: the month-5 ranked selection view and the manager confirm/override. */
+/**
+ * Legacy endpoint retained under an explicit legacy namespace for historical/demo data only.
+ * The active workflow is {@link com.poultryprophet.selectionreview.SelectionReviewController}.
+ */
 @RestController
-@RequestMapping("/api/batches/{batchId}/selection")
+@RequestMapping("/api/legacy/batches/{batchId}/selection")
 public class SelectionController {
 
     private final SelectionService selectionService;

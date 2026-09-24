@@ -96,7 +96,7 @@ public class AnalyticsService {
 
     /** Water-to-feed ratio for the latest day; null (flagged) when feed intake is zero. */
     public Double computeWfr(DailyRecord latest) {
-        if (latest.getFeedIntakeG() <= 0.0) {
+        if (latest.getFeedIntakeG() == null || latest.getWaterIntakeMl() == null || latest.getFeedIntakeG() <= 0.0) {
             return null;
         }
         return round2(latest.getWaterIntakeMl() / latest.getFeedIntakeG());
@@ -113,9 +113,10 @@ public class AnalyticsService {
         }
         double sum = 0.0;
         for (int i = 1; i < recentDesc.size(); i++) {
-            sum += recentDesc.get(i).getFeedIntakeG();
+            Double value = recentDesc.get(i).getFeedIntakeG();
+            if (value != null) sum += value;
         }
-        return sum / (recentDesc.size() - 1);
+        return sum == 0.0 ? 0.0 : sum / Math.max(1, recentDesc.subList(1, recentDesc.size()).stream().filter(r -> r.getFeedIntakeG() != null).count());
     }
 
     private double averageWaterExcludingLatest(List<DailyRecord> recentDesc) {
@@ -124,14 +125,15 @@ public class AnalyticsService {
         }
         double sum = 0.0;
         for (int i = 1; i < recentDesc.size(); i++) {
-            sum += recentDesc.get(i).getWaterIntakeMl();
+            Double value = recentDesc.get(i).getWaterIntakeMl();
+            if (value != null) sum += value;
         }
-        return sum / (recentDesc.size() - 1);
+        return sum == 0.0 ? 0.0 : sum / Math.max(1, recentDesc.subList(1, recentDesc.size()).stream().filter(r -> r.getWaterIntakeMl() != null).count());
     }
 
     /** No history is insufficient data, never a fabricated perfect score. */
-    private Double deviationScore(double current, double average) {
-        if (average <= 0.0) {
+    private Double deviationScore(Double current, double average) {
+        if (current == null || average <= 0.0) {
             return null;
         }
         double ratio = Math.abs(current - average) / average;

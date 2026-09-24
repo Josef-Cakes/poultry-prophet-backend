@@ -2,14 +2,12 @@ spring:
   application:
     name: poultry-prophet-backend
 
-  # Supabase PostgreSQL connection.
-  # Set these via environment variables (recommended) or edit the defaults below.
-  # Supabase -> Project Settings -> Database -> Connection string (use the
-  # "Session pooler" / port 5432 URI for JPA/Hibernate). SSL is required.
+  # Supply database credentials through the deployment environment. No
+  # production-capable credential may be committed or used as a fallback.
   datasource:
-    url: ${SUPABASE_DATABASE_URL}
-    username: ${SUPABASE_DATABASE_USERNAME}
-    password: ${SUPABASE_DB_PASSWORD}
+    url: ${SPRING_DATASOURCE_URL}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
     driver-class-name: org.postgresql.Driver
 
   jpa:
@@ -53,8 +51,8 @@ app:
 # Application-specific configuration.
 poultry:
   security:
-    # CHANGE THIS in production. Must be a Base64-encoded secret of at least 256 bits (32 bytes).
-    jwt-secret: ${JWT_SECRET:Y2hhbmdlLW1lLXBvdWx0cnktcHJvcGhldC1zdXBlci1zZWNyZXQta2V5LTEyMzQ1Ng==}
+    # Required: Base64-encoded secret of at least 256 bits (32 bytes).
+    jwt-secret: ${JWT_SECRET}
     jwt-expiration-ms: ${JWT_EXPIRATION_MS:86400000} # 24h
     allowed-origins: ${APP_ALLOWED_ORIGINS:http://localhost:3000}
   analytics:

@@ -69,8 +69,8 @@ public class DailyRecordService {
      */
     @Transactional
     public DailyRecord upsert(Long batchId, Long farmId, Long handlerId, LocalDate date,
-                              double temperatureC, Integer mortalityCount, double feedIntakeG,
-                              double waterIntakeMl, String behaviorNotes,
+                              double temperatureC, Integer mortalityCount, Double feedIntakeG,
+                              Double waterIntakeMl, String behaviorNotes,
                               Instant updatedAt, SyncStatus syncStatus) {
         return upsert(batchId, farmId, handlerId, date, temperatureC, mortalityCount, feedIntakeG,
                 waterIntakeMl, behaviorNotes, ObservationQuality.UNKNOWN, ObservationQuality.UNKNOWN,
@@ -79,8 +79,8 @@ public class DailyRecordService {
 
     @Transactional
     public DailyRecord upsert(Long batchId, Long farmId, Long handlerId, LocalDate date,
-                              double temperatureC, Integer mortalityCount, double feedIntakeG,
-                              double waterIntakeMl, String behaviorNotes,
+                              double temperatureC, Integer mortalityCount, Double feedIntakeG,
+                              Double waterIntakeMl, String behaviorNotes,
                               ObservationQuality temperatureQuality, ObservationQuality feedQuality,
                               ObservationQuality waterQuality, Instant updatedAt, SyncStatus syncStatus) {
         Batch batch = batchService.requireBatch(batchId, farmId);

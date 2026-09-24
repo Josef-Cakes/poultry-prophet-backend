@@ -21,7 +21,7 @@ import java.util.Map;
 
 /** SDD 2.4: thresholds are DB-backed and editable without code changes. */
 @RestController
-@RequestMapping("/api/thresholds")
+@RequestMapping("/api/legacy/thresholds")
 public class ThresholdController {
 
     private static final java.util.Set<String> MVP_INDICATORS = java.util.Set.of("BHI", "BSI", "WFR");

@@ -56,9 +56,8 @@ public class Batch {
     private LifecycleStage stage;
 
     /**
-     * When false (default), the batch's lifecycle stage is derived automatically from its age
-     * (see {@code BatchService#resolveStage}). A manager picking a stage explicitly sets this
-     * true, pinning the override until they switch back to "Auto".
+     * Legacy compatibility column. Stage resolution is now always age-based; this flag is no
+     * longer used to permit manual stage overrides on existing rows.
      */
     @Column(nullable = false)
     private boolean stageManual = false;
