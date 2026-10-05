@@ -65,6 +65,12 @@ $env:JWT_SECRET="<a base64 string of at least 32 bytes>"
 
 `spring.jpa.hibernate.ddl-auto=update` creates/updates tables automatically on a local validation
 run. Production schema changes require a reviewed migration and backup.
+The Hikari pool defaults to at most five connections per backend process (one idle connection).
+For Supabase's session pooler, budget that limit across every backend instance using the same
+database role and database; leave room for local tools and overlapping deploys. If startup reports
+`EMAXCONNSESSION`, inspect active pooler clients and stop stale app instances before increasing the
+pool limit. The limit can be set with `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE` when capacity
+has been confirmed.
 On startup a `DataSeeder` inserts the game fowl lifecycle stages (`brooding`, `ranging`,
 `pre-conditioning`, `maintenance`, `conditioning`) and default alert thresholds
 (BHI 60–100, BSI 0–40, WFR 1.5–2.5).

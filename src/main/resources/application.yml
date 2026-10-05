@@ -18,6 +18,11 @@ spring:
     username: ${SPRING_DATASOURCE_USERNAME}
     password: ${SPRING_DATASOURCE_PASSWORD}
     driver-class-name: org.postgresql.Driver
+    hikari:
+      # Keep the per-process connection budget below Supabase session-pool limits.
+      # Override with SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE when the DB budget allows it.
+      maximum-pool-size: ${SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE:5}
+      minimum-idle: ${SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE:1}
 
   jpa:
     hibernate:

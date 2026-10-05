@@ -16,6 +16,7 @@ import com.poultryprophet.selectionreview.SelectionReviewService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Clock;
 import java.time.LocalDate;
 import java.util.Comparator;
 import java.util.List;
@@ -29,22 +30,25 @@ public class DashboardService {
     private final BatchHandlerAssignmentRepository assignmentRepository;
     private final AlertRepository alertRepository;
     private final SelectionReviewService selectionReviewService;
+    private final Clock applicationClock;
 
     public DashboardService(BatchRepository batchRepository,
                             BatchService batchService,
                             BatchHandlerAssignmentRepository assignmentRepository,
                             AlertRepository alertRepository,
-                            SelectionReviewService selectionReviewService) {
+                            SelectionReviewService selectionReviewService,
+                            Clock applicationClock) {
         this.batchRepository = batchRepository;
         this.batchService = batchService;
         this.assignmentRepository = assignmentRepository;
         this.alertRepository = alertRepository;
         this.selectionReviewService = selectionReviewService;
+        this.applicationClock = applicationClock;
     }
 
     @Transactional(readOnly = true)
     public List<BatchDashboardResponse> listForFarm(Long farmId) {
-        LocalDate today = LocalDate.now();
+        LocalDate today = LocalDate.now(applicationClock);
         return batchRepository.findByFarmIdAndStatusNotOrderByCreatedAtDesc(farmId, BatchStatus.ARCHIVED)
                 .stream()
                 .map(batch -> toResponse(batch, farmId, today))
