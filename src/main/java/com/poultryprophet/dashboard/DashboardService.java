@@ -63,8 +63,9 @@ public class DashboardService {
                 stageView.stage(),
                 stageView.auto());
 
+        LocalDate periodStart = batch.getStartDate().isAfter(today) ? today : batch.getStartDate();
         SelectionReviewPayload payload = selectionReviewService.preview(
-                batch.getId(), farmId, batch.getStartDate(), today, today, false);
+                batch.getId(), farmId, periodStart, today, today, false);
         SelectionReviewPayload.PopulationSummary population = payload.population();
         long otherChanges = population.accidentalDeaths()
                 + population.predation()

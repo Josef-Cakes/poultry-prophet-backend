@@ -11,6 +11,7 @@
     import com.poultryprophet.user.UserRepository;
     import com.poultryprophet.user.Role;
     import org.springframework.security.authentication.AuthenticationManager;
+    import org.springframework.security.authentication.BadCredentialsException;
     import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
     import org.springframework.security.core.AuthenticationException;
     import org.springframework.security.crypto.password.PasswordEncoder;
@@ -62,10 +63,10 @@
                 authenticationManager.authenticate(
                         new UsernamePasswordAuthenticationToken(request.email(), request.password()));
             } catch (AuthenticationException ex) {
-                throw new BadRequestException("Invalid email or password");
+                throw new BadCredentialsException("Invalid email or password");
             }
             User user = userRepository.findByEmail(request.email())
-                    .orElseThrow(() -> new BadRequestException("Invalid email or password"));
+                    .orElseThrow(() -> new BadCredentialsException("Invalid email or password"));
             return toResponse(user);
         }
 
