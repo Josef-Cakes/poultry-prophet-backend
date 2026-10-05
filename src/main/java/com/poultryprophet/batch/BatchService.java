@@ -168,6 +168,15 @@ public class BatchService {
         return new StageView(auto, true);
     }
 
+    /** Resolves the lifecycle stage as it was on a historical report date. */
+    public StageView resolveStage(Batch batch, LocalDate asOfDate) {
+        LocalDate effectiveDate = asOfDate == null ? LocalDate.now() : asOfDate;
+        long days = Math.max(1, ChronoUnit.DAYS.between(batch.getStartDate(), effectiveDate) + 1);
+        LifecycleStage auto = stageRepository.findByNameIgnoreCase(autoStageName(days))
+                .orElse(batch.getStage());
+        return new StageView(auto, true);
+    }
+
     private BatchResponse toResponse(Batch batch) {
         StageView stageView = resolveStage(batch);
         return BatchResponse.from(batch,

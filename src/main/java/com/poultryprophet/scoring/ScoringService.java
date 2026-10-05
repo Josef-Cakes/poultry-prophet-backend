@@ -8,6 +8,7 @@ import com.poultryprophet.record.DailyRecord;
 import com.poultryprophet.record.DailyRecordRepository;
 import com.poultryprophet.ranging.RangingRecord;
 import com.poultryprophet.ranging.RangingRecordRepository;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -33,6 +34,7 @@ import java.util.List;
  * design-decision weights are both PROVISIONAL starting values.
  */
 @Service
+@ConditionalOnProperty(name = "app.features.legacy-individual-selection-enabled", havingValue = "true")
 public class ScoringService {
 
     // Provisional brooding temperature safe band (deg C) used by the BHI temperature component.
@@ -139,8 +141,8 @@ public class ScoringService {
         if (records.size() < 2) {
             return 100.0;
         }
-        double feedStability = stabilityScore(records.stream().mapToDouble(DailyRecord::getFeedIntakeG).toArray());
-        double waterStability = stabilityScore(records.stream().mapToDouble(DailyRecord::getWaterIntakeMl).toArray());
+        double feedStability = stabilityScore(records.stream().filter(r -> r.getFeedIntakeG() != null).mapToDouble(r -> r.getFeedIntakeG()).toArray());
+        double waterStability = stabilityScore(records.stream().filter(r -> r.getWaterIntakeMl() != null).mapToDouble(r -> r.getWaterIntakeMl()).toArray());
         return clamp((feedStability + waterStability) / 2.0);
     }
 
@@ -150,6 +152,7 @@ public class ScoringService {
             return 100.0;
         }
         long inBand = records.stream()
+                .filter(r -> r.getTemperatureC() != null)
                 .filter(r -> Math.abs(r.getTemperatureC() - BROODING_TARGET_TEMP_C) <= BROODING_TEMP_TOLERANCE_C)
                 .count();
         return clamp((inBand / (double) records.size()) * 100.0);
@@ -217,6 +220,9 @@ public class ScoringService {
 
     /** 100 minus the coefficient of variation (as a percentage), clamped to 0-100. */
     private double stabilityScore(double[] values) {
+        if (values.length == 0) {
+            return 0.0;
+        }
         double mean = 0.0;
         for (double v : values) {
             mean += v;

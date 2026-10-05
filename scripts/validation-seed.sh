@@ -23,6 +23,11 @@ MANAGER_PASSWORD="$VALIDATION_MANAGER_PASSWORD"
 HANDLER_PASSWORD="$VALIDATION_HANDLER_PASSWORD"
 
 case "$API_BASE" in
+  http://localhost:*|http://127.0.0.1:*) ;;
+  *) echo "Refusing a non-local validation API URL: $API_BASE" >&2; exit 1 ;;
+esac
+
+case "$API_BASE" in
   *vercel.app*|*render.com*|*supabase.co*)
     echo "Refusing to seed a deployed or hosted URL: $API_BASE" >&2
     exit 1
@@ -36,13 +41,7 @@ require_command uuidgen
 
 login_payload=$(jq -nc --arg email "$MANAGER_EMAIL" --arg password "$MANAGER_PASSWORD" \
   '{email:$email,password:$password}')
-if manager_json=$(curl -fsS "$API_BASE/auth/login" -H 'Content-Type: application/json' -d "$login_payload"); then
-  :
-else
-  register_payload=$(jq -nc --arg email "$MANAGER_EMAIL" --arg password "$MANAGER_PASSWORD" --arg name "$MANAGER_NAME" \
-    '{email:$email,password:$password,fullName:$name}')
-  manager_json=$(curl -fsS "$API_BASE/auth/register" -H 'Content-Type: application/json' -d "$register_payload")
-fi
+manager_json=$(curl -fsS "$API_BASE/auth/login" -H 'Content-Type: application/json' -d "$login_payload")
 TOKEN=$(jq -r '.token // empty' <<<"$manager_json")
 test -n "$TOKEN" || { echo "Validation manager login did not return a token" >&2; exit 1; }
 

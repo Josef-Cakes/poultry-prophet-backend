@@ -11,7 +11,7 @@ public record SyncItemRequest(
         @NotNull String clientId,
         @NotNull Long batchId,
         @NotNull LocalDate recordDate,
-        @NotNull Double temperatureC,
+        @jakarta.validation.constraints.DecimalMin("0.0") @jakarta.validation.constraints.DecimalMax("60.0") Double temperatureC,
         @Min(0) Integer mortalityCount,
         @jakarta.validation.constraints.DecimalMin("0.0") Double feedIntakeG,
         @jakarta.validation.constraints.DecimalMin("0.0") Double waterIntakeMl,

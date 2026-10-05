@@ -11,6 +11,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.validation.FieldError;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
@@ -46,6 +47,21 @@ public class GlobalExceptionHandler {
         ApiError body = ApiError.of(HttpStatus.BAD_REQUEST.value(),
                 HttpStatus.BAD_REQUEST.getReasonPhrase(), "Validation failed", fieldErrors);
         return ResponseEntity.badRequest().body(body);
+    }
+
+    /**
+     * Keep malformed JSON and unknown enum values actionable. In particular, an older backend
+     * build receiving the newer ANALYTICS_PACK profile otherwise looks like an unhelpful
+     * generic "Bad Request" in the Test Lab UI.
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ApiError> handleUnreadableRequest(HttpMessageNotReadableException ex) {
+        Throwable cause = ex.getMostSpecificCause();
+        String detail = cause == null ? "" : String.valueOf(cause.getMessage());
+        String message = detail.contains("TestLabProfile") || detail.contains("ANALYTICS_PACK")
+                ? "The running backend does not support this test-pack profile yet. Restart or redeploy the backend, then refresh the frontend."
+                : "Request body is invalid. Check the selected values and try again.";
+        return build(HttpStatus.BAD_REQUEST, message);
     }
 
     @ExceptionHandler(AccessDeniedException.class)

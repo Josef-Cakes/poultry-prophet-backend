@@ -1,6 +1,7 @@
 package com.poultryprophet.selection;
 
 import com.poultryprophet.security.CustomUserDetails;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import com.poultryprophet.selection.dto.SelectionDecisionRequest;
 import com.poultryprophet.selection.dto.SelectionRowResponse;
 import com.poultryprophet.selection.dto.SelectionViewResponse;
@@ -20,6 +21,7 @@ import org.springframework.web.bind.annotation.RestController;
  */
 @RestController
 @RequestMapping("/api/legacy/batches/{batchId}/selection")
+@ConditionalOnProperty(name = "app.features.legacy-individual-selection-enabled", havingValue = "true")
 public class SelectionController {
 
     private final SelectionService selectionService;

@@ -66,8 +66,14 @@ public class MortalityAccountingService {
         if (request.operationId() != null) {
             BatchEvent existing = eventRepository.findByOperationId(request.operationId()).orElse(null);
             if (existing != null) {
-                if (!batchId.equals(existing.getBatchId())) {
-                    throw new BadRequestException("operationId has already been used for another batch");
+                if (!batchId.equals(existing.getBatchId())
+                        || (existing.getEventType() != null && existing.getEventType() != type)
+                        || (existing.getEventDate() != null && !java.util.Objects.equals(existing.getEventDate(), date))
+                        || (existing.getAffectedCount() != 0 && existing.getAffectedCount() != request.affectedCount())
+                        || (existing.getTitle() != null && !java.util.Objects.equals(existing.getTitle(), request.title()))
+                        || (existing.getDetails() != null && !java.util.Objects.equals(existing.getDetails(), request.details()))
+                        || (existing.getTags() != null && !java.util.Objects.equals(existing.getTags(), request.tags()))) {
+                    throw new BadRequestException("operationId has already been used for a different population event");
                 }
                 return new MortalityAccountingResult(existing,
                         existing.getPopulationAfter() != null
@@ -151,7 +157,7 @@ public class MortalityAccountingService {
     private MortalityAccountingResult persistCanonicalEvent(Batch batch, LocalDate date,
                                                               BatchEvent event, int delta) {
         BatchEvent saved = eventRepository.save(event);
-        int remainingPopulation = batch.getCurrentPopulation() + delta;
+        int remainingPopulation = Math.toIntExact((long) batch.getCurrentPopulation() + delta);
         batch.setCurrentPopulation(remainingPopulation);
         event.setPopulationAfter(remainingPopulation);
         batchRepository.save(batch);
@@ -193,7 +199,7 @@ public class MortalityAccountingService {
         if (type == EventType.COUNT_CORRECTION && delta == 0) {
             throw new BadRequestException("A count correction must change the population");
         }
-        int resultingPopulation = batch.getCurrentPopulation() + delta;
+        long resultingPopulation = (long) batch.getCurrentPopulation() + delta;
         if (resultingPopulation < 0) {
             throw new BadRequestException("This event would make the population negative; current alive: "
                     + batch.getCurrentPopulation());
@@ -221,6 +227,7 @@ public class MortalityAccountingService {
         event.setTitle(request.title());
         event.setDetails(request.details());
         event.setTags(request.tags());
+        event.setSalePurpose(SalePurposeParser.parse(request.eventType(), request.tags()));
         return event;
     }
 

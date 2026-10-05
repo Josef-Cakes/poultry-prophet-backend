@@ -13,7 +13,7 @@ public record DailyRecordResponse(
         Long handlerId,
         String handlerName,
         LocalDate recordDate,
-        double temperatureC,
+        Double temperatureC,
         int mortalityCount,
         Double feedIntakeG,
         Double waterIntakeMl,

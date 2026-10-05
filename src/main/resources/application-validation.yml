@@ -15,6 +15,15 @@ app:
   legacy:
     allow-mortality-reconciliation: false
 
+validation:
+  farm-id: ${VALIDATION_FARM_ID:}
+  manager:
+    email: ${VALIDATION_MANAGER_EMAIL:}
+    password: ${VALIDATION_MANAGER_PASSWORD:}
+  handler:
+    email: ${VALIDATION_HANDLER_EMAIL:}
+    password: ${VALIDATION_HANDLER_PASSWORD:}
+
 poultry:
   security:
     allowed-origins: ${APP_ALLOWED_ORIGINS:http://localhost:3000}

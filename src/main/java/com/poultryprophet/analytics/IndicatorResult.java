@@ -6,7 +6,7 @@ public record IndicatorResult(
         Double bsi,
         Double wfr,
         Double readinessScore,
-        double temperatureScore,
+        Double temperatureScore,
         double mortalityScore,
         Double feedScore,
         Double waterScore,

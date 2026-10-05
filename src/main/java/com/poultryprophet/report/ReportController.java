@@ -3,6 +3,7 @@ package com.poultryprophet.report;
 import com.poultryprophet.report.dto.ExportResult;
 import com.poultryprophet.report.dto.ReportResponse;
 import com.poultryprophet.security.CustomUserDetails;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -21,6 +22,7 @@ import java.time.LocalDate;
 @RestController
 @RequestMapping("/api/legacy")
 @PreAuthorize("hasRole('MANAGER')")
+@ConditionalOnProperty(name = "app.features.legacy-indicators-enabled", havingValue = "true")
 public class ReportController {
 
     private final ReportService reportService;

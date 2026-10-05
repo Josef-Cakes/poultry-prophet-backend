@@ -35,14 +35,14 @@ public class AnalyticsService {
         }
         DailyRecord latest = recentDesc.get(0);
         double target = props.targetTempFor(batch.getStage().getName());
-        double tempScore = round1(clamp(100.0 - Math.abs(latest.getTemperatureC() - target) * 8.0));
+        Double tempScore = latest.getTemperatureC() == null ? null : round1(clamp(100.0 - Math.abs(latest.getTemperatureC() - target) * 8.0));
         double mortalityScore = mortalityScore(latest, batch);
         Double feedScore = deviationScore(latest.getFeedIntakeG(), averageFeedExcludingLatest(recentDesc));
         Double waterScore = deviationScore(latest.getWaterIntakeMl(), averageWaterExcludingLatest(recentDesc));
-        boolean sufficientData = feedScore != null && waterScore != null;
+        boolean sufficientData = tempScore != null && feedScore != null && waterScore != null;
         Double bhi = sufficientData ? weightedScore(tempScore, mortalityScore, feedScore, waterScore) : null;
         Double wfr = computeWfr(latest);
-        Double bsi = batch.isBrooding() ? computeBsi(recentDesc, batch) : null;
+        Double bsi = batch.isBrooding() && latest.getTemperatureC() != null ? computeBsi(recentDesc, batch) : null;
         AnalyticsProperties.Weights w = props.getWeights();
         double totalWeight = w.total() == 0 ? 1.0 : w.total();
         return new IndicatorResult(
@@ -59,7 +59,7 @@ public class AnalyticsService {
                 sufficientData ? contribution(feedScore, w.getFeed(), totalWeight) : null,
                 sufficientData ? contribution(waterScore, w.getWater(), totalWeight) : null,
                 sufficientData,
-                sufficientData ? null : "BHI requires at least one prior positive feed and water observation.",
+                sufficientData ? null : "BHI requires temperature plus prior positive feed and water observations.",
                 FORMULA_VERSION);
     }
 
@@ -68,6 +68,9 @@ public class AnalyticsService {
         DailyRecord latest = recentDesc.get(0);
 
         double target = props.targetTempFor(batch.getStage().getName());
+        if (latest.getTemperatureC() == null) {
+            return 0.0;
+        }
         double tempScore = clamp(100.0 - Math.abs(latest.getTemperatureC() - target) * 8.0);
 
         double population = Math.max(1.0, batch.getCurrentPopulation());
@@ -87,6 +90,9 @@ public class AnalyticsService {
     /** Brooding-stage stress (0-100, higher = more stress). Provisional heuristic. */
     public double computeBsi(List<DailyRecord> recentDesc, Batch batch) {
         DailyRecord latest = recentDesc.get(0);
+        if (latest.getTemperatureC() == null) {
+            return 0.0;
+        }
         double tempPenalty = Math.abs(latest.getTemperatureC() - BROODING_TARGET_TEMP_C) * 6.0;
         double population = Math.max(1.0, batch.getCurrentPopulation());
         double mortalityPenalty = (latest.getMortalityCount() / population) * 8_000.0;

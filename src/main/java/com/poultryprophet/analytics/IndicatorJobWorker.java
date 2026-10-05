@@ -8,6 +8,7 @@ import com.poultryprophet.record.DailyRecord;
 import com.poultryprophet.record.DailyRecordRepository;
 import com.poultryprophet.record.event.RecordCreatedEvent;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
@@ -28,6 +29,7 @@ import java.util.List;
  * event records and the Selection Review Report instead.
  */
 @Component
+@ConditionalOnProperty(name = "app.features.legacy-indicators-enabled", havingValue = "true")
 public class IndicatorJobWorker {
 
     private final DailyRecordRepository recordRepository;

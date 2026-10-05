@@ -15,7 +15,7 @@
     <artifactId>poultry-prophet-backend</artifactId>
     <version>0.1.0</version>
     <name>poultry-prophet-backend</name>
-    <description>Spring Boot backend for the Poultry Prophet smart game-farm batch monitoring and predictive analytics system</description>
+    <description>Spring Boot backend for the Poultry Prophet event-based game-farm batch monitoring and selection-review decision-support system</description>
 
     <properties>
         <java.version>21</java.version>

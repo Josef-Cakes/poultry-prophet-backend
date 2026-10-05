@@ -5,15 +5,19 @@ import com.poultryprophet.common.BadRequestException;
 import com.poultryprophet.common.NotFoundException;
 import com.poultryprophet.incubation.IncubationCycle;
 import com.poultryprophet.incubation.IncubationService;
-import com.poultryprophet.batch.BatchHandlerAssignmentRepository;
 import com.poultryprophet.input.dto.CreateFarmInputRequest;
 import com.poultryprophet.input.dto.FarmInputLogResponse;
+import com.poultryprophet.inventory.InventoryService;
+import com.poultryprophet.inventory.InventoryStatus;
+import com.poultryprophet.inventory.dto.InventoryUseResult;
 import com.poultryprophet.user.Role;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 
 @Service
 public class FarmInputService {
@@ -21,28 +25,41 @@ public class FarmInputService {
     private final FarmInputLogRepository repository;
     private final BatchService batchService;
     private final IncubationService incubationService;
-    private final BatchHandlerAssignmentRepository assignmentRepository;
+    private final InventoryService inventoryService;
 
     public FarmInputService(FarmInputLogRepository repository, BatchService batchService,
-                            IncubationService incubationService,
-                            BatchHandlerAssignmentRepository assignmentRepository) {
+                            IncubationService incubationService) {
+        this(repository, batchService, incubationService, null);
+    }
+
+    @Autowired
+    public FarmInputService(FarmInputLogRepository repository, BatchService batchService,
+                            IncubationService incubationService, InventoryService inventoryService) {
         this.repository = repository;
         this.batchService = batchService;
         this.incubationService = incubationService;
-        this.assignmentRepository = assignmentRepository;
+        this.inventoryService = inventoryService;
     }
 
     @Transactional
     public FarmInputLogResponse create(Long farmId, Long userId, Role role, CreateFarmInputRequest request) {
         if (farmId == null) throw new BadRequestException("Join a farm before recording inputs");
+
+        UUID operationId = request.operationId() == null ? UUID.randomUUID() : request.operationId();
+        FarmInputLog existing = repository.findByOperationId(operationId).orElse(null);
+        if (existing != null) {
+            if (!farmId.equals(existing.getFarmId())
+                    || !java.util.Objects.equals(request.batchId(), existing.getBatchId())
+                    || request.productType() != existing.getProductType()
+                    || !request.brandName().trim().equals(existing.getBrandName())) {
+                throw new BadRequestException("operationId has already been used for a different input record");
+            }
+            return FarmInputLogResponse.from(existing);
+        }
         if (request.batchId() == null && request.incubationCycleId() == null) {
             throw new BadRequestException("Link the input to a batch or incubation cycle");
         }
         if (request.batchId() != null) batchService.requireBatch(request.batchId(), farmId);
-        if (role == Role.HANDLER && request.batchId() != null
-                && !assignmentRepository.existsByBatchIdAndUserId(request.batchId(), userId)) {
-            throw new BadRequestException("You are not assigned to this batch");
-        }
         if (request.incubationCycleId() != null) incubationService.require(request.incubationCycleId(), farmId);
         if (request.productType() == InputProductType.MEDICINE || request.productType() == InputProductType.VACCINE) {
             if (request.purpose() == null || request.purpose().isBlank()) {
@@ -63,7 +80,20 @@ public class FarmInputService {
         log.setPurpose(trimToNull(request.purpose()));
         log.setNotes(trimToNull(request.notes()));
         log.setRecordedBy(userId);
-        return FarmInputLogResponse.from(repository.save(log));
+        log.setOperationId(operationId);
+        log.setFarmProductId(request.farmProductId());
+        log.setAffectedBirdCount(request.affectedBirdCount());
+        log.setInventoryStatus(request.farmProductId() == null
+                ? InventoryStatus.UNTRACKED : InventoryStatus.PENDING_STOCK_REVIEW);
+        FarmInputLog saved = repository.save(log);
+        if (inventoryService != null && request.farmProductId() != null && request.quantity() != null) {
+            InventoryUseResult result = inventoryService.applyUsage(farmId, userId, request.farmProductId(),
+                    java.math.BigDecimal.valueOf(request.quantity()), saved.getRecordedAt(), saved.getBatchId(), saved.getId());
+            saved.setInventoryMovementId(result.movementId());
+            saved.setInventoryStatus(InventoryStatus.valueOf(result.status()));
+            saved = repository.save(saved);
+        }
+        return FarmInputLogResponse.from(saved);
     }
 
     @Transactional(readOnly = true)

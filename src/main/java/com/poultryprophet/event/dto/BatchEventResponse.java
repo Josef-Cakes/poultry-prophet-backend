@@ -2,6 +2,7 @@ package com.poultryprophet.event.dto;
 
 import com.poultryprophet.event.BatchEvent;
 import com.poultryprophet.event.EventType;
+import com.poultryprophet.event.SalePurpose;
 
 import java.time.Instant;
 import java.time.LocalDate;
@@ -23,7 +24,8 @@ public record BatchEventResponse(
         UUID operationId,
         Integer populationDelta,
         Integer populationAfter,
-        Integer remainingPopulation
+        Integer remainingPopulation,
+        SalePurpose salePurpose
 ) {
     public static BatchEventResponse from(BatchEvent e, String handlerName) {
         return from(e, handlerName, null);
@@ -35,6 +37,6 @@ public record BatchEventResponse(
                 e.getEventDate(), e.getEventType(), e.getSeverityLabel(),
                 e.getAffectedCount(), e.getTitle(), e.getDetails(),
                 e.getTags(), e.getCreatedAt(), e.getOperationId(), e.getPopulationDelta(),
-                e.getPopulationAfter(), remainingPopulation);
+                e.getPopulationAfter(), remainingPopulation, e.getSalePurpose());
     }
 }

@@ -38,8 +38,9 @@ public class DailyRecord {
     @Column(name = "record_date", nullable = false)
     private LocalDate recordDate;
 
-    @Column(nullable = false)
-    private double temperatureC;
+    /** Optional: temperature is recorded only when a thermometer is used. */
+    @Column
+    private Double temperatureC;
 
     @Column(nullable = false)
     private int mortalityCount;
@@ -110,11 +111,11 @@ public class DailyRecord {
         this.recordDate = recordDate;
     }
 
-    public double getTemperatureC() {
+    public Double getTemperatureC() {
         return temperatureC;
     }
 
-    public void setTemperatureC(double temperatureC) {
+    public void setTemperatureC(Double temperatureC) {
         this.temperatureC = temperatureC;
     }
 
