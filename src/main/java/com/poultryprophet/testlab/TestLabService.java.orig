@@ -1,0 +1,300 @@
+package com.poultryprophet.testlab;
+
+import com.poultryprophet.batch.BatchStatus;
+import com.poultryprophet.batch.BatchService;
+import com.poultryprophet.batch.dto.BatchResponse;
+import com.poultryprophet.batch.dto.CreateBatchRequest;
+import com.poultryprophet.common.BadRequestException;
+import com.poultryprophet.event.BatchEventService;
+import com.poultryprophet.event.EventType;
+import com.poultryprophet.event.dto.CreateBatchEventRequest;
+import com.poultryprophet.finance.FinanceService;
+import com.poultryprophet.finance.FinanceTransactionType;
+import com.poultryprophet.finance.dto.CreateFinancialTransactionRequest;
+import com.poultryprophet.input.FarmInputService;
+import com.poultryprophet.input.InputProductType;
+import com.poultryprophet.input.dto.CreateFarmInputRequest;
+import com.poultryprophet.record.DailyRecordService;
+import com.poultryprophet.record.ObservationQuality;
+import com.poultryprophet.record.dto.CreateRecordRequest;
+import com.poultryprophet.selectionreview.CreateSelectionReviewRequest;
+import com.poultryprophet.selectionreview.SelectionReviewService;
+import com.poultryprophet.task.TaskPriority;
+import com.poultryprophet.task.TaskService;
+import com.poultryprophet.task.TaskStatus;
+import com.poultryprophet.task.dto.CreateTaskRequest;
+import com.poultryprophet.task.dto.TaskResponse;
+import com.poultryprophet.task.dto.UpdateTaskStatusRequest;
+import com.poultryprophet.user.Role;
+import com.poultryprophet.user.User;
+import com.poultryprophet.user.UserRepository;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+import java.util.stream.IntStream;
+
+@Service
+public class TestLabService {
+
+    public static final String CONFIRMATION = "CREATE_TEST_COPY";
+    private static final int DAYS = 100;
+    private static final ZoneId FARM_TIME_ZONE = ZoneId.of("Asia/Manila");
+
+    private final TestLabSafetyService safety;
+    private final BatchService batchService;
+    private final BatchEventService eventService;
+    private final DailyRecordService recordService;
+    private final FarmInputService inputService;
+    private final FinanceService financeService;
+    private final TaskService taskService;
+    private final SelectionReviewService reviewService;
+    private final UserRepository userRepository;
+
+    public TestLabService(TestLabSafetyService safety,
+                          BatchService batchService,
+                          BatchEventService eventService,
+                          DailyRecordService recordService,
+                          FarmInputService inputService,
+                          FinanceService financeService,
+                          TaskService taskService,
+                          SelectionReviewService reviewService,
+                          UserRepository userRepository) {
+        this.safety = safety;
+        this.batchService = batchService;
+        this.eventService = eventService;
+        this.recordService = recordService;
+        this.inputService = inputService;
+        this.financeService = financeService;
+        this.taskService = taskService;
+        this.reviewService = reviewService;
+        this.userRepository = userRepository;
+    }
+
+    @Transactional
+    public GenerateTestBatchResponse generate(GenerateTestBatchRequest request,
+                                              Long farmId,
+                                              Long managerId) {
+        safety.requireEnabled();
+        if (!CONFIRMATION.equals(request.confirmation())) {
+            throw new BadRequestException("Confirm creation of a synthetic test copy first");
+        }
+        if (farmId == null) throw new BadRequestException("Join a farm before using Test Lab");
+
+        BatchResponse source = batchService.getForFarm(request.sourceBatchId(), farmId);
+        if (source.status() == BatchStatus.ARCHIVED) {
+            throw new BadRequestException("Choose an active source batch");
+        }
+        if (source.name().startsWith("[TEST COPY]")) {
+            throw new BadRequestException("Choose an original batch, not another test copy");
+        }
+        if (source.initialPopulation() < 20) {
+            throw new BadRequestException("The source batch needs at least 20 birds for this scenario");
+        }
+
+        TestLabProfile profile = request.profile() == null
+                ? TestLabProfile.REALISTIC : request.profile();
+        long seed = Math.floorMod(
+                request.seed() == null ? System.currentTimeMillis() : request.seed(),
+                1_000_000_000L);
+        LocalDate today = LocalDate.now(FARM_TIME_ZONE);
+        LocalDate startDate = today.minusDays(DAYS);
+        LocalDate endDate = startDate.plusDays(DAYS - 1L);
+        String runId = "100d-" + today.format(DateTimeFormatter.BASIC_ISO_DATE)
+                + "-" + seed + "-" + profile.name().toLowerCase();
+
+        List<Long> handlerIds = resolveHandlers(source, farmId);
+        Long recordActorId = handlerIds.isEmpty() ? managerId : handlerIds.get(0);
+        Role recordActorRole = handlerIds.isEmpty() ? Role.MANAGER : Role.HANDLER;
+        String batchName = testBatchName(source.name(), runId);
+
+        BatchResponse created = batchService.create(new CreateBatchRequest(
+                batchName,
+                source.initialPopulation(),
+                startDate,
+                null,
+                source.bloodline(),
+                "SYNTHETIC_VALIDATION:" + runId + " copied from local batch " + source.id(),
+                handlerIds), farmId);
+
+        List<SyntheticEvent> eventPlan = eventPlan();
+        for (SyntheticEvent item : eventPlan) {
+            eventService.create(created.id(), farmId, recordActorId,
+                    new CreateBatchEventRequest(
+                            day(startDate, item.day()),
+                            item.type(),
+                            item.title(),
+                            item.type() == EventType.HEALTH_CONCERN ? "WARNING" : null,
+                            item.affectedCount(),
+                            "Synthetic Test Lab event; not a production farm record.",
+                            "SYNTHETIC_VALIDATION:" + runId,
+                            stableUuid(runId + ":event:" + item.day() + ":" + item.type()),
+                            item.populationDelta()));
+        }
+
+        List<Integer> observationDays = profile == TestLabProfile.DAILY_COVERAGE
+                ? IntStream.rangeClosed(1, DAYS).boxed().toList()
+                : List.of(1, 10, 20, 30, 45, 60, 75, 90, 100);
+        for (Integer observationDay : observationDays) {
+            recordService.record(created.id(), farmId,
+                    new CreateRecordRequest(
+                            day(startDate, observationDay),
+                            null,
+                            null,
+                            null,
+                            null,
+                            "Synthetic observation day " + observationDay
+                                    + "; feed, water, and temperature were not measured.",
+                            ObservationQuality.UNAVAILABLE,
+                            ObservationQuality.UNAVAILABLE,
+                            ObservationQuality.UNAVAILABLE),
+                    recordActorId);
+        }
+
+        createInputs(created.id(), farmId, recordActorId, recordActorRole, startDate, runId);
+        createFinance(created.id(), farmId, managerId, startDate, runId);
+        createCompletedTask(created.id(), farmId, managerId,
+                handlerIds.isEmpty() ? null : handlerIds.get(0), runId);
+        createReviews(created.id(), farmId, managerId, startDate, runId);
+
+        BatchResponse finished = batchService.getForFarm(created.id(), farmId);
+        int expectedPopulation = source.initialPopulation() - 10;
+        if (finished.currentPopulation() != expectedPopulation) {
+            throw new IllegalStateException("Synthetic population verification failed");
+        }
+
+        return new GenerateTestBatchResponse(
+                "SYNTHETIC_VALIDATION",
+                source.id(),
+                finished.id(),
+                finished.name(),
+                profile,
+                seed,
+                startDate,
+                endDate,
+                source.initialPopulation(),
+                finished.currentPopulation(),
+                eventPlan.size(),
+                observationDays.size(),
+                2,
+                3,
+                1,
+                3);
+    }
+
+    private List<Long> resolveHandlers(BatchResponse source, Long farmId) {
+        List<Long> handlers = new ArrayList<>(source.handlerUserIds());
+        if (handlers.isEmpty()) {
+            userRepository.findByRoleAndFarmId(Role.HANDLER, farmId).stream()
+                    .findFirst().map(User::getId).ifPresent(handlers::add);
+        }
+        return handlers;
+    }
+
+    private void createInputs(Long batchId, Long farmId, Long actorId, Role actorRole,
+                              LocalDate startDate, String runId) {
+        inputService.create(farmId, actorId, actorRole, new CreateFarmInputRequest(
+                batchId, null, instant(day(startDate, 5)), InputProductType.FEED,
+                "Baby Stag Booster", "Starter feed", 1.0, "pack", null,
+                "Routine feed record", "Synthetic Test Lab input; actual intake is not claimed."));
+        inputService.create(farmId, actorId, actorRole, new CreateFarmInputRequest(
+                batchId, null, instant(day(startDate, 50)), InputProductType.MEDICINE,
+                "Validation Vitamin Sachet", "Soluble vitamin", 1.0, "sachet",
+                "SOLUBLE_IN_WATER", "Recorded health intervention",
+                "Synthetic Test Lab input " + runId + "; actual intake is not claimed."));
+    }
+
+    private void createFinance(Long batchId, Long farmId, Long managerId,
+                               LocalDate startDate, String runId) {
+        financeService.create(farmId, managerId, new CreateFinancialTransactionRequest(
+                batchId, null, day(startDate, 4), FinanceTransactionType.EXPENSE,
+                "Feed", new BigDecimal("2500.00"), "PHP", "Synthetic supplier",
+                "Synthetic feed expense " + runId));
+        financeService.create(farmId, managerId, new CreateFinancialTransactionRequest(
+                batchId, null, day(startDate, 50), FinanceTransactionType.EXPENSE,
+                "Medicine", new BigDecimal("450.00"), "PHP", "Synthetic supplier",
+                "Synthetic medicine expense " + runId));
+        financeService.create(farmId, managerId, new CreateFinancialTransactionRequest(
+                batchId, null, day(startDate, 80), FinanceTransactionType.INCOME,
+                "Sale", new BigDecimal("1000.00"), "PHP", "Synthetic buyer",
+                "Synthetic sale income " + runId));
+    }
+
+    private void createCompletedTask(Long batchId, Long farmId, Long managerId,
+                                     Long handlerId, String runId) {
+        TaskResponse task = taskService.create(farmId, managerId, new CreateTaskRequest(
+                "Review synthetic batch history",
+                "Check the generated history and report. Technical validation only: " + runId,
+                batchId, null, handlerId, Instant.now().plusSeconds(3600), TaskPriority.NORMAL));
+        taskService.updateStatus(task.id(), farmId, managerId, true,
+                new UpdateTaskStatusRequest(TaskStatus.COMPLETED,
+                        "Synthetic Test Lab task completed by the manager generator."));
+    }
+
+    private void createReviews(Long batchId, Long farmId, Long managerId,
+                               LocalDate startDate, String runId) {
+        for (Integer checkpoint : List.of(30, 60, 100)) {
+            LocalDate checkpointDate = day(startDate, checkpoint);
+            reviewService.create(batchId, farmId, managerId, new CreateSelectionReviewRequest(
+                    startDate,
+                    checkpointDate,
+                    checkpointDate,
+                    "SYNTHETIC_VALIDATION",
+                    "Synthetic Test Lab checkpoint day " + checkpoint,
+                    runId + ":review:" + checkpoint));
+        }
+    }
+
+    private List<SyntheticEvent> eventPlan() {
+        return List.of(
+                new SyntheticEvent(3, EventType.HEALTH_CONCERN, 1, "Health concern observed", null),
+                new SyntheticEvent(7, EventType.HEALTH_DEATH, 2, "Health-related death", null),
+                new SyntheticEvent(14, EventType.ACCIDENTAL_DEATH, 1, "Accidental death", null),
+                new SyntheticEvent(20, EventType.BEHAVIOR_OBSERVATION, 1, "Behavior observation", null),
+                new SyntheticEvent(23, EventType.SUSPECTED_PREDATION, 1, "Suspected predation", null),
+                new SyntheticEvent(31, EventType.CONFIRMED_PREDATION, 1, "Confirmed predation", null),
+                new SyntheticEvent(45, EventType.MISSING, 2, "Missing birds", null),
+                new SyntheticEvent(50, EventType.VACCINE_MEDICINE, 1, "Medicine recorded", null),
+                new SyntheticEvent(60, EventType.FOUND_RETURNED, 1, "Found and returned", null),
+                new SyntheticEvent(70, EventType.TRANSFER_OUT, 3, "Transfer out", null),
+                new SyntheticEvent(72, EventType.TRANSFER_IN, 2, "Transfer in", null),
+                new SyntheticEvent(80, EventType.SALE, 4, "Sale recorded", null),
+                new SyntheticEvent(90, EventType.CULLING, 1, "Culling recorded", null),
+                new SyntheticEvent(95, EventType.COUNT_CORRECTION, 1, "Count correction", 2));
+    }
+
+    private LocalDate day(LocalDate startDate, int dayNumber) {
+        return startDate.plusDays(dayNumber - 1L);
+    }
+
+    private Instant instant(LocalDate date) {
+        return date.atTime(LocalTime.of(8, 0)).atZone(FARM_TIME_ZONE).toInstant();
+    }
+
+    private UUID stableUuid(String value) {
+        return UUID.nameUUIDFromBytes(value.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private String testBatchName(String sourceName, String runId) {
+        String safeSource = sourceName.length() > 100 ? sourceName.substring(0, 100) : sourceName;
+        return "[TEST COPY] " + safeSource + " - " + runId;
+    }
+
+    private record SyntheticEvent(
+            int day,
+            EventType type,
+            int affectedCount,
+            String title,
+            Integer populationDelta
+    ) {
+    }
+}

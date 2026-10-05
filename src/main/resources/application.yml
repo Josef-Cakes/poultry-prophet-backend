@@ -40,6 +40,9 @@ server:
 
 app:
   time-zone: ${APP_TIME_ZONE:Asia/Manila}
+  features:
+    legacy-indicators-enabled: ${APP_LEGACY_INDICATORS_ENABLED:false}
+    legacy-individual-selection-enabled: ${APP_LEGACY_INDIVIDUAL_SELECTION_ENABLED:false}
   release:
     version: ${APP_VERSION:0.1.0-validation}
     commit-sha: ${APP_COMMIT_SHA:unknown}

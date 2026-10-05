@@ -18,6 +18,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Optional;
 
@@ -70,10 +71,51 @@ class SelectionReviewServiceTest {
         assertThat(payload.population().missing()).isEqualTo(1);
         assertThat(payload.population().returned()).isEqualTo(1);
         assertThat(payload.population().legacyMortalityRecords()).isEqualTo(4);
+        assertThat(payload.population().currentPopulation()).isEqualTo(91);
+        assertThat(payload.population().reconciliationRequired()).isFalse();
         assertThat(payload.healthEvents()).hasSize(1);
         assertThat(payload.finance()).isNull();
         assertThat(payload.dataAvailability()).anyMatch(value -> value.section().equals("Population events")
                 && value.recordCount() == 5);
+    }
+
+    @Test
+    void usesTheBoundedBatchCountAndFlagsAnImpossibleCurrentLedgerTotal() {
+        LocalDate today = LocalDate.now(ZoneId.of("Asia/Manila"));
+        Batch batch = new Batch();
+        batch.setId(9L);
+        batch.setFarmId(3L);
+        batch.setName("Legacy event batch");
+        batch.setInitialPopulation(100);
+        batch.setCurrentPopulation(39);
+        batch.setStartDate(today.minusDays(23));
+        LifecycleStage stage = new LifecycleStage("brooding", 0);
+        BatchEvent invalidLegacyTotal = event(EventType.MORTALITY, 161, -161);
+        invalidLegacyTotal.setEventDate(today.minusDays(2));
+
+        when(batchService.requireBatch(9L, 3L)).thenReturn(batch);
+        when(batchService.resolveStage(batch)).thenReturn(new BatchService.StageView(stage, true));
+        when(eventRepository.findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(
+                9L, batch.getStartDate(), today)).thenReturn(List.of(invalidLegacyTotal));
+        when(inputRepository.findByFarmIdAndBatchIdOrderByRecordedAtDesc(3L, 9L)).thenReturn(List.of());
+        when(incubationRepository.findByFarmIdAndCreatedBatchId(3L, 9L)).thenReturn(List.of());
+
+        ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
+        SelectionReviewService service = new SelectionReviewService(reviewRepository, eventRepository,
+                inputRepository, incubationRepository, financeRepository, batchService, objectMapper);
+
+        SelectionReviewPayload payload = service.preview(9L, 3L,
+                batch.getStartDate(), today, today, false);
+
+        assertThat(payload.population().calculatedPopulationFromEvents()).isEqualTo(-61);
+        assertThat(payload.population().currentPopulation()).isEqualTo(39);
+        assertThat(payload.batch().currentPopulationDisplay()).isEqualTo("39 / 100");
+        assertThat(payload.population().reconciliationRequired()).isTrue();
+        assertThat(payload.population().reconciliationMessage())
+                .contains("calculate -61 alive")
+                .contains("batch record contains 39");
+        assertThat(payload.dataAvailability()).anyMatch(item ->
+                item.section().equals("Population reconciliation") && item.status().equals("PARTIAL"));
     }
 
     @Test

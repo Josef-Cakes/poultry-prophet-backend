@@ -11,6 +11,7 @@ import com.poultryprophet.common.BadRequestException;
 import com.poultryprophet.report.dto.ReportPayload;
 import com.poultryprophet.report.dto.ReportResponse;
 import com.poultryprophet.user.UserRepository;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -21,6 +22,7 @@ import java.util.List;
 
 /** SDD 3.2: aggregates indicators, records and alerts for a period into a report payload. */
 @Service
+@ConditionalOnProperty(name = "app.features.legacy-indicators-enabled", havingValue = "true")
 public class ReportService {
 
     private final ReportRepository reportRepository;

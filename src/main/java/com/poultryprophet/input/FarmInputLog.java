@@ -8,8 +8,10 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import com.poultryprophet.inventory.InventoryStatus;
 
 import java.time.Instant;
+import java.util.UUID;
 
 @Entity
 @Table(name = "farm_input_log")
@@ -59,6 +61,23 @@ public class FarmInputLog {
     @Column(name = "recorded_by", nullable = false)
     private Long recordedBy;
 
+    /** Stable client identity used to make offline retries idempotent. */
+    @Column(name = "operation_id", unique = true)
+    private UUID operationId;
+
+    @Column(name = "farm_product_id")
+    private Long farmProductId;
+
+    @Column(name = "inventory_movement_id")
+    private Long inventoryMovementId;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "inventory_status", length = 32)
+    private InventoryStatus inventoryStatus;
+
+    @Column(name = "affected_bird_count")
+    private Integer affectedBirdCount;
+
     @Column(nullable = false, updatable = false)
     private Instant createdAt = Instant.now();
 
@@ -90,6 +109,16 @@ public class FarmInputLog {
     public void setNotes(String notes) { this.notes = notes; }
     public Long getRecordedBy() { return recordedBy; }
     public void setRecordedBy(Long recordedBy) { this.recordedBy = recordedBy; }
+    public UUID getOperationId() { return operationId; }
+    public void setOperationId(UUID operationId) { this.operationId = operationId; }
+    public Long getFarmProductId() { return farmProductId; }
+    public void setFarmProductId(Long farmProductId) { this.farmProductId = farmProductId; }
+    public Long getInventoryMovementId() { return inventoryMovementId; }
+    public void setInventoryMovementId(Long inventoryMovementId) { this.inventoryMovementId = inventoryMovementId; }
+    public InventoryStatus getInventoryStatus() { return inventoryStatus; }
+    public void setInventoryStatus(InventoryStatus inventoryStatus) { this.inventoryStatus = inventoryStatus; }
+    public Integer getAffectedBirdCount() { return affectedBirdCount; }
+    public void setAffectedBirdCount(Integer affectedBirdCount) { this.affectedBirdCount = affectedBirdCount; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
 }

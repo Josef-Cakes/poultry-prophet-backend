@@ -13,6 +13,14 @@ test -n "${VALIDATION_DB_NAME:-}" || { echo "Set validation environment variable
 test -n "${VALIDATION_DB_USER:-}" || { echo "Set VALIDATION_DB_USER" >&2; exit 1; }
 test -n "${VALIDATION_DB_PASSWORD:-}" || { echo "Set VALIDATION_DB_PASSWORD" >&2; exit 1; }
 test -n "${VALIDATION_JWT_SECRET:-}" || { echo "Set VALIDATION_JWT_SECRET" >&2; exit 1; }
+test -n "${VALIDATION_MANAGER_EMAIL:-}" || { echo "Set VALIDATION_MANAGER_EMAIL" >&2; exit 1; }
+test -n "${VALIDATION_MANAGER_PASSWORD:-}" || { echo "Set VALIDATION_MANAGER_PASSWORD" >&2; exit 1; }
+test -n "${VALIDATION_HANDLER_EMAIL:-}" || { echo "Set VALIDATION_HANDLER_EMAIL" >&2; exit 1; }
+test -n "${VALIDATION_HANDLER_PASSWORD:-}" || { echo "Set VALIDATION_HANDLER_PASSWORD" >&2; exit 1; }
+case "$VALIDATION_DB_NAME" in
+  *validation*|*test*) ;;
+  *) echo "Refusing a non-validation database name: $VALIDATION_DB_NAME" >&2; exit 1 ;;
+esac
 
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" up --build -d
 echo "Validation API: ${VALIDATION_API_BASE_URL:-http://localhost:18080/api}"

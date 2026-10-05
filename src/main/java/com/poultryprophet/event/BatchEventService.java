@@ -52,13 +52,20 @@ public class BatchEventService {
         }
 
         Batch batch = batchService.requireBatchForUpdate(batchId, farmId);
+        LocalDate date = dateValidation.resolve(req.eventDate());
         BatchEvent existing = req.operationId() == null
                 ? null
                 : eventRepository.findByOperationId(req.operationId()).orElse(null);
         if (existing != null) {
-            if (!batchId.equals(existing.getBatchId())) {
+            if (!batchId.equals(existing.getBatchId())
+                    || (existing.getEventType() != null && existing.getEventType() != req.eventType())
+                    || (existing.getEventDate() != null && !java.util.Objects.equals(existing.getEventDate(), date))
+                    || (existing.getAffectedCount() != 0 && existing.getAffectedCount() != req.affectedCount())
+                    || (existing.getTitle() != null && !java.util.Objects.equals(existing.getTitle(), req.title()))
+                    || (existing.getDetails() != null && !java.util.Objects.equals(existing.getDetails(), req.details()))
+                    || (existing.getTags() != null && !java.util.Objects.equals(existing.getTags(), req.tags()))) {
                 throw new com.poultryprophet.common.BadRequestException(
-                        "operationId has already been used for another batch");
+                        "operationId has already been used for a different event record");
             }
             String existingHandlerName = userRepository.findById(existing.getHandlerId())
                     .map(User::getFullName).orElse("Unknown");
@@ -68,7 +75,6 @@ public class BatchEventService {
                             : batch.getCurrentPopulation());
         }
 
-        LocalDate date = dateValidation.resolve(req.eventDate());
         dateValidation.validate(date, batch.getStartDate());
 
         BatchEvent event = new BatchEvent();
@@ -78,6 +84,7 @@ public class BatchEventService {
         event.setEventDate(date);
         event.setEventType(req.eventType());
         event.setSeverityLabel(req.severityLabel());
+        event.setSalePurpose(SalePurposeParser.parse(req.eventType(), req.tags()));
         event.setAffectedCount(req.affectedCount());
         event.setPopulationDelta(0);
         event.setPopulationAfter(batch.getCurrentPopulation());

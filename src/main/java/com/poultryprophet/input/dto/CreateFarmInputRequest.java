@@ -6,6 +6,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 
 import java.time.Instant;
+import java.util.UUID;
 
 public record CreateFarmInputRequest(
         Long batchId,
@@ -18,6 +19,24 @@ public record CreateFarmInputRequest(
         String unit,
         String route,
         String purpose,
-        String notes
+        String notes,
+        UUID operationId,
+        Long farmProductId,
+        Integer affectedBirdCount
 ) {
+    /** Compatibility constructor for existing online callers and test fixtures. */
+    public CreateFarmInputRequest(Long batchId,
+                                  Long incubationCycleId,
+                                  Instant recordedAt,
+                                  InputProductType productType,
+                                  String brandName,
+                                  String productName,
+                                  Double quantity,
+                                  String unit,
+                                  String route,
+                                  String purpose,
+                                  String notes) {
+        this(batchId, incubationCycleId, recordedAt, productType, brandName, productName,
+                quantity, unit, route, purpose, notes, null, null, null);
+    }
 }

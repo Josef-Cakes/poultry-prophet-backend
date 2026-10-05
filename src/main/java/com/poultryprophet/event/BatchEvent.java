@@ -111,4 +111,11 @@ public class BatchEvent {
 
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
+    /** Optional context for SALE events; nullable for existing and non-sale events. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "sale_purpose")
+    private SalePurpose salePurpose;
+
+    public SalePurpose getSalePurpose() { return salePurpose; }
+    public void setSalePurpose(SalePurpose salePurpose) { this.salePurpose = salePurpose; }
 }

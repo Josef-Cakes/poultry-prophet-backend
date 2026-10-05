@@ -5,6 +5,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Versioned, explainable report payload. Every displayed value is either derived from a named
@@ -24,6 +25,7 @@ public record SelectionReviewPayload(
         IncubationSummary incubation,
         FinanceSummary finance,
         List<DataAvailabilityItem> dataAvailability,
+        SelectionSummary selectionSummary,
         ReviewInstructions reviewInstructions
 ) {
     public record BatchOverview(
@@ -43,6 +45,9 @@ public record SelectionReviewPayload(
     public record PopulationSummary(
             int initialPopulation,
             int currentPopulation,
+            long calculatedPopulationFromEvents,
+            boolean reconciliationRequired,
+            String reconciliationMessage,
             long healthRelatedDeaths,
             Double healthRelatedLossPercentage,
             long accidentalDeaths,
@@ -116,6 +121,22 @@ public record SelectionReviewPayload(
             int recordCount,
             LocalDate latestDate,
             String message
+    ) {}
+
+    public record SelectionSummary(
+            Long sessionId,
+            LocalDate selectionDate,
+            String status,
+            int evaluatedCount,
+            int acceptedCount,
+            int continueObservationCount,
+            int notAcceptedCount,
+            int otherCount,
+            Double selectionRatePercent,
+            Set<String> criterionCodes,
+            Long reviewerId,
+            String criteriaNotes,
+            String notes
     ) {}
 
     public record ReviewInstructions(

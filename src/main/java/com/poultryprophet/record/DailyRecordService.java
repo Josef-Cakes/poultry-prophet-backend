@@ -69,7 +69,7 @@ public class DailyRecordService {
      */
     @Transactional
     public DailyRecord upsert(Long batchId, Long farmId, Long handlerId, LocalDate date,
-                              double temperatureC, Integer mortalityCount, Double feedIntakeG,
+                              Double temperatureC, Integer mortalityCount, Double feedIntakeG,
                               Double waterIntakeMl, String behaviorNotes,
                               Instant updatedAt, SyncStatus syncStatus) {
         return upsert(batchId, farmId, handlerId, date, temperatureC, mortalityCount, feedIntakeG,
@@ -79,7 +79,7 @@ public class DailyRecordService {
 
     @Transactional
     public DailyRecord upsert(Long batchId, Long farmId, Long handlerId, LocalDate date,
-                              double temperatureC, Integer mortalityCount, Double feedIntakeG,
+                              Double temperatureC, Integer mortalityCount, Double feedIntakeG,
                               Double waterIntakeMl, String behaviorNotes,
                               ObservationQuality temperatureQuality, ObservationQuality feedQuality,
                               ObservationQuality waterQuality, Instant updatedAt, SyncStatus syncStatus) {

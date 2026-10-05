@@ -21,6 +21,10 @@ import com.poultryprophet.incubation.IncubationCycle;
 import com.poultryprophet.incubation.IncubationCycleRepository;
 import com.poultryprophet.input.FarmInputLog;
 import com.poultryprophet.input.FarmInputLogRepository;
+import com.poultryprophet.selectionsession.SelectionSessionResponse;
+import com.poultryprophet.selectionsession.SelectionSessionService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -29,7 +33,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.ZoneOffset;
+import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -43,7 +47,7 @@ import java.util.Map;
  */
 @Service
 public class SelectionReviewService {
-    public static final String PAYLOAD_VERSION = "selection-review-v1";
+    public static final String PAYLOAD_VERSION = "selection-review-v3";
 
     private final BatchSelectionReviewRepository reviewRepository;
     private final BatchEventRepository eventRepository;
@@ -52,14 +56,20 @@ public class SelectionReviewService {
     private final FinancialTransactionRepository financeRepository;
     private final BatchService batchService;
     private final ObjectMapper objectMapper;
+    private final SelectionSessionService selectionSessionService;
 
+    @Value("${app.time-zone:Asia/Manila}")
+    private String timeZone;
+
+    @Autowired
     public SelectionReviewService(BatchSelectionReviewRepository reviewRepository,
                                   BatchEventRepository eventRepository,
                                   FarmInputLogRepository inputRepository,
                                   IncubationCycleRepository incubationRepository,
                                   FinancialTransactionRepository financeRepository,
                                   BatchService batchService,
-                                  ObjectMapper objectMapper) {
+                                  ObjectMapper objectMapper,
+                                  SelectionSessionService selectionSessionService) {
         this.reviewRepository = reviewRepository;
         this.eventRepository = eventRepository;
         this.inputRepository = inputRepository;
@@ -67,6 +77,19 @@ public class SelectionReviewService {
         this.financeRepository = financeRepository;
         this.batchService = batchService;
         this.objectMapper = objectMapper;
+        this.selectionSessionService = selectionSessionService;
+    }
+
+    /** Compatibility constructor for focused unit tests that do not load selection sessions. */
+    public SelectionReviewService(BatchSelectionReviewRepository reviewRepository,
+                                  BatchEventRepository eventRepository,
+                                  FarmInputLogRepository inputRepository,
+                                  IncubationCycleRepository incubationRepository,
+                                  FinancialTransactionRepository financeRepository,
+                                  BatchService batchService,
+                                  ObjectMapper objectMapper) {
+        this(reviewRepository, eventRepository, inputRepository, incubationRepository,
+                financeRepository, batchService, objectMapper, null);
     }
 
     @Transactional(readOnly = true)
@@ -169,12 +192,19 @@ public class SelectionReviewService {
                                              boolean includeFinance) {
         List<BatchEvent> events = eventRepository
                 .findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(batch.getId(), periodStart, periodEnd);
+        List<BatchEvent> eventsThroughAsOf = periodStart.equals(batch.getStartDate())
+                && periodEnd.equals(asOfDate)
+                ? events
+                : eventRepository.findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(
+                        batch.getId(), batch.getStartDate(), asOfDate);
         List<FarmInputLog> products = inputRepository.findByFarmIdAndBatchIdOrderByRecordedAtDesc(farmId, batch.getId())
                 .stream().filter(value -> within(value.getRecordedAt(), periodStart, periodEnd)).toList();
 
+        // Keep the shared service accessor here so existing report tests and callers retain the
+        // same stage fallback behavior. The report's age is still calculated from its as-of date.
         BatchService.StageView stage = batchService.resolveStage(batch);
         LocalDate latestEventDate = events.stream().map(BatchEvent::getEventDate).max(LocalDate::compareTo).orElse(null);
-        SelectionReviewPayload.PopulationSummary population = populationSummary(batch, events);
+        SelectionReviewPayload.PopulationSummary population = populationSummary(batch, eventsThroughAsOf, asOfDate);
 
         List<SelectionReviewPayload.HealthEventItem> healthEvents = events.stream()
                 .filter(value -> value.getEventType() == EventType.HEALTH_DEATH
@@ -207,11 +237,16 @@ public class SelectionReviewService {
         List<SelectionReviewPayload.DataAvailabilityItem> availability = new ArrayList<>();
         availability.add(availability("Population events", events.size(), latestEventDate,
                 "No recorded event does not prove that no event occurred."));
+        if (population.reconciliationRequired()) {
+            availability.add(new SelectionReviewPayload.DataAvailabilityItem(
+                    "Population reconciliation", "PARTIAL", population.sourceEventCount(), latestEventDate,
+                    population.reconciliationMessage()));
+        }
         availability.add(availability("Health history", healthEvents.size(),
                 healthEvents.stream().map(SelectionReviewPayload.HealthEventItem::eventDate).max(LocalDate::compareTo).orElse(null),
                 "Only recorded observations and health-related events are shown; this is not a diagnosis."));
         availability.add(availability("Product-use history", productUse.size(),
-                productUse.stream().map(value -> value.recordedAt().atZone(ZoneOffset.UTC).toLocalDate()).max(LocalDate::compareTo).orElse(null),
+                productUse.stream().map(value -> value.recordedAt().atZone(farmZone()).toLocalDate()).max(LocalDate::compareTo).orElse(null),
                 "Quantity may be unavailable when the farm records only a pack, sachet, or product name."));
         availability.add(incubation == null
                 ? new SelectionReviewPayload.DataAvailabilityItem("Incubation context", "NOT_APPLICABLE", 0, null,
@@ -226,10 +261,30 @@ public class SelectionReviewService {
                     "Financial totals are recorded cash-flow entries and may be incomplete."));
         }
 
+        SelectionReviewPayload.SelectionSummary selectionSummary = null;
+        if (selectionSessionService != null) {
+            SelectionSessionResponse latestSelection = selectionSessionService.latestFinalized(batch.getId(), farmId, asOfDate);
+            if (latestSelection != null) {
+                selectionSummary = new SelectionReviewPayload.SelectionSummary(
+                        latestSelection.id(), latestSelection.selectionDate(), latestSelection.status().name(),
+                        latestSelection.evaluatedCount(), latestSelection.acceptedCount(),
+                        latestSelection.continueObservationCount(), latestSelection.notAcceptedCount(),
+                        latestSelection.otherCount(), latestSelection.selectionRatePercent(),
+                        latestSelection.criterionCodes(), latestSelection.reviewerId(), latestSelection.criteriaNotes(),
+                        latestSelection.sessionNotes());
+            }
+            availability.add(selectionSummary == null
+                    ? new SelectionReviewPayload.DataAvailabilityItem("Selection session", "NO_RECORDS", 0, null,
+                    "No finalized batch-level selection session was recorded by the as-of date.")
+                    : new SelectionReviewPayload.DataAvailabilityItem("Selection session", "AVAILABLE", 1,
+                    selectionSummary.selectionDate(),
+                    "Selection outcome was recorded by a manager; it does not change population automatically."));
+        }
+
         SelectionReviewPayload.BatchOverview overview = new SelectionReviewPayload.BatchOverview(
                 batch.getId(), batch.getName(), batch.getBloodline(), batch.getSource(), batch.getInitialPopulation(),
-                batch.getCurrentPopulation(), batch.getCurrentPopulation() + " / " + batch.getInitialPopulation(),
-                Math.max(1, ChronoUnit.DAYS.between(batch.getStartDate(), asOfDate)), stage.stage().getName(),
+                population.currentPopulation(), population.currentPopulation() + " / " + batch.getInitialPopulation(),
+                Math.max(1, ChronoUnit.DAYS.between(batch.getStartDate(), asOfDate) + 1), stage.stage().getName(),
                 batch.getStartDate(), latestEventDate);
 
         return new SelectionReviewPayload(
@@ -237,10 +292,12 @@ public class SelectionReviewService {
                 "Descriptive decision support only. This report does not diagnose, predict performance, rank birds, or automatically select a bird.",
                 PAYLOAD_VERSION, periodStart, periodEnd, asOfDate, overview, population, healthEvents, productUse,
                 incubation, finance, availability,
+                selectionSummary,
                 new SelectionReviewPayload.ReviewInstructions(ManagerReviewStatus.NOT_REVIEWED.name(), null, null, null, null));
     }
 
-    private SelectionReviewPayload.PopulationSummary populationSummary(Batch batch, List<BatchEvent> events) {
+    private SelectionReviewPayload.PopulationSummary populationSummary(Batch batch, List<BatchEvent> events,
+                                                                         LocalDate asOfDate) {
         Map<String, Long> categories = new LinkedHashMap<>();
         categories.put("healthRelatedDeaths", 0L);
         categories.put("accidentalDeaths", 0L);
@@ -253,9 +310,14 @@ public class SelectionReviewService {
         categories.put("culling", 0L);
         categories.put("countCorrections", 0L);
         categories.put("legacyMortalityRecords", 0L);
+        categories.put("salesForBreeding", 0L);
+        categories.put("salesOtherPurpose", 0L);
 
+        long calculatedPopulation = batch.getInitialPopulation();
         for (BatchEvent event : events) {
-            long amount = Math.abs(event.getPopulationDelta() == null ? event.getAffectedCount() : event.getPopulationDelta());
+            long delta = populationDelta(event);
+            calculatedPopulation += delta;
+            long amount = Math.abs(event.getPopulationDelta() == null ? delta : (long) event.getPopulationDelta());
             String key = switch (event.getEventType()) {
                 case HEALTH_DEATH -> "healthRelatedDeaths";
                 case ACCIDENTAL_DEATH -> "accidentalDeaths";
@@ -271,17 +333,56 @@ public class SelectionReviewService {
                 default -> null;
             };
             if (key != null) categories.computeIfPresent(key, (ignored, value) -> value + amount);
+            if (event.getEventType() == EventType.SALE && event.getSalePurpose() != null) {
+                String purposeKey = event.getSalePurpose() == com.poultryprophet.event.SalePurpose.BREEDING
+                        ? "salesForBreeding" : "salesOtherPurpose";
+                categories.computeIfPresent(purposeKey, (ignored, value) -> value + amount);
+            }
         }
 
+        boolean currentAsOfDate = asOfDate.equals(LocalDate.now(farmZone()));
+        long preferredPopulation = currentAsOfDate ? batch.getCurrentPopulation() : calculatedPopulation;
+        int boundedPopulation = (int) Math.max(0L,
+                Math.min((long) batch.getInitialPopulation(), preferredPopulation));
+        boolean eventTotalOutsideBounds = calculatedPopulation < 0
+                || calculatedPopulation > batch.getInitialPopulation();
+        boolean currentProjectionOutsideBounds = batch.getCurrentPopulation() < 0
+                || batch.getCurrentPopulation() > batch.getInitialPopulation();
+        boolean projectionMismatch = currentAsOfDate
+                && calculatedPopulation != batch.getCurrentPopulation();
+        boolean reconciliationRequired = eventTotalOutsideBounds
+                || currentProjectionOutsideBounds
+                || projectionMismatch;
+        String reconciliationMessage = reconciliationRequired
+                ? populationReconciliationMessage(batch, calculatedPopulation, boundedPopulation,
+                        currentAsOfDate, projectionMismatch)
+                : null;
+
         long healthDeaths = categories.get("healthRelatedDeaths");
-        Double rate = batch.getInitialPopulation() == 0 ? null
+        Double rate = batch.getInitialPopulation() == 0 || healthDeaths > batch.getInitialPopulation() ? null
                 : round(healthDeaths * 100.0 / batch.getInitialPopulation(), 2);
         return new SelectionReviewPayload.PopulationSummary(
-                batch.getInitialPopulation(), batch.getCurrentPopulation(), healthDeaths, rate,
+                batch.getInitialPopulation(), boundedPopulation, calculatedPopulation,
+                reconciliationRequired, reconciliationMessage, healthDeaths, rate,
                 categories.get("accidentalDeaths"), categories.get("predation"), categories.get("missing"),
                 categories.get("returned"), categories.get("transfersOut"), categories.get("transfersIn"),
                 categories.get("sales"), categories.get("culling"), categories.get("countCorrections"),
                 categories.get("legacyMortalityRecords"), events.size(), categories);
+    }
+
+    private String populationReconciliationMessage(Batch batch, long calculatedPopulation,
+                                                   int boundedPopulation, boolean currentAsOfDate,
+                                                   boolean projectionMismatch) {
+        if (currentAsOfDate && projectionMismatch) {
+            return "Population events calculate " + calculatedPopulation
+                    + " alive, while the batch record contains " + batch.getCurrentPopulation()
+                    + ". Showing " + boundedPopulation
+                    + "; review duplicate, legacy, or incorrect population events.";
+        }
+        return "Population events calculate " + calculatedPopulation
+                + " alive, outside the valid range of 0 to " + batch.getInitialPopulation()
+                + ". Showing " + boundedPopulation
+                + "; review duplicate, legacy, or incorrect population events.";
     }
 
     private SelectionReviewPayload.IncubationSummary incubationSummary(IncubationCycle cycle) {
@@ -318,17 +419,24 @@ public class SelectionReviewService {
 
     private boolean within(Instant timestamp, LocalDate start, LocalDate end) {
         if (timestamp == null) return false;
-        Instant from = start.atStartOfDay().toInstant(ZoneOffset.UTC);
-        Instant until = end.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
+        ZoneId zone = farmZone();
+        Instant from = start.atStartOfDay(zone).toInstant();
+        Instant until = end.plusDays(1).atStartOfDay(zone).toInstant();
         return !timestamp.isBefore(from) && timestamp.isBefore(until);
     }
 
+    private ZoneId farmZone() {
+        return ZoneId.of(timeZone == null || timeZone.isBlank() ? "Asia/Manila" : timeZone);
+    }
+
     private Dates normalizeDates(Batch batch, LocalDate requestedStart, LocalDate requestedEnd, LocalDate requestedAsOf) {
-        LocalDate end = requestedEnd == null ? LocalDate.now() : requestedEnd;
+        LocalDate today = LocalDate.now(farmZone());
+        LocalDate end = requestedEnd == null ? today : requestedEnd;
         LocalDate start = requestedStart == null ? batch.getStartDate() : requestedStart;
         LocalDate asOf = requestedAsOf == null ? end : requestedAsOf;
         if (start.isAfter(end)) throw new BadRequestException("periodStart must not be after periodEnd");
         if (asOf.isBefore(start) || asOf.isAfter(end)) throw new BadRequestException("asOfDate must be within the report period");
+        if (end.isAfter(today)) throw new BadRequestException("Report dates cannot be in the future");
         return new Dates(start, end, asOf);
     }
 
@@ -340,13 +448,16 @@ public class SelectionReviewService {
             payload = new SelectionReviewPayload(payload.reportTitle(), payload.disclaimer(), payload.payloadVersion(),
                     payload.periodStart(), payload.periodEnd(), payload.asOfDate(), payload.batch(), payload.population(),
                     payload.healthEvents(), payload.productUse(), payload.incubation(), null, publicAvailability,
+                    payload.selectionSummary(),
                     payload.reviewInstructions());
         }
         Instant sourceCutoff = review.getSourceCutoffAt() == null ? review.getGeneratedAt() : review.getSourceCutoffAt();
         boolean newerDataAvailable = sourceCutoff != null && (
                 eventRepository.existsByBatchIdAndCreatedAtAfter(review.getBatchId(), sourceCutoff)
                         || inputRepository.existsByFarmIdAndBatchIdAndCreatedAtAfter(review.getFarmId(), review.getBatchId(), sourceCutoff)
-                        || financeRepository.existsByFarmIdAndBatchIdAndCreatedAtAfter(review.getFarmId(), review.getBatchId(), sourceCutoff));
+                        || financeRepository.existsByFarmIdAndBatchIdAndCreatedAtAfter(review.getFarmId(), review.getBatchId(), sourceCutoff)
+                        || (selectionSessionService != null
+                        && selectionSessionService.hasChangedAfter(review.getBatchId(), review.getFarmId(), sourceCutoff)));
         return new SelectionReviewResponse(review.getId(), review.getFarmId(), review.getBatchId(),
                 payload.batch().batchName(), review.getPeriodStart(), review.getPeriodEnd(), review.getAsOfDate(),
                 review.getStatus(), review.getReviewStatus(), review.getManagerNotes(), review.getNextReviewDate(),
@@ -361,7 +472,7 @@ public class SelectionReviewService {
         return new SelectionReviewPayload(payload.reportTitle(), payload.disclaimer(), payload.payloadVersion(),
                 payload.periodStart(), payload.periodEnd(), payload.asOfDate(), payload.batch(), payload.population(),
                 payload.healthEvents(), payload.productUse(), payload.incubation(), payload.finance(),
-                payload.dataAvailability(), instructions);
+                payload.dataAvailability(), payload.selectionSummary(), instructions);
     }
 
     private String writeJson(SelectionReviewPayload payload) {
@@ -374,10 +485,64 @@ public class SelectionReviewService {
 
     private SelectionReviewPayload readPayload(String json) {
         try {
-            return objectMapper.readValue(json, SelectionReviewPayload.class);
+            return normalizeStoredPopulation(objectMapper.readValue(json, SelectionReviewPayload.class));
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("Could not read selection review snapshot", exception);
         }
+    }
+
+    /**
+     * Older immutable snapshots may contain an impossible negative population. Preserve their
+     * recorded event totals for audit, but never present an impossible alive count as valid.
+     */
+    private SelectionReviewPayload normalizeStoredPopulation(SelectionReviewPayload payload) {
+        if (payload == null || payload.population() == null || payload.batch() == null) return payload;
+        SelectionReviewPayload.PopulationSummary population = payload.population();
+        SelectionReviewPayload.BatchOverview batch = payload.batch();
+        boolean currentOutsideBounds = population.currentPopulation() < 0
+                || population.currentPopulation() > population.initialPopulation();
+        boolean batchOutsideBounds = batch.currentPopulation() < 0
+                || batch.currentPopulation() > batch.initialPopulation();
+        boolean legacyPayload = !PAYLOAD_VERSION.equals(payload.payloadVersion());
+        boolean reconciliationRequired = population.reconciliationRequired()
+                || currentOutsideBounds || batchOutsideBounds;
+        if (!reconciliationRequired) return payload;
+
+        int boundedPopulation = (int) Math.max(0L,
+                Math.min((long) population.initialPopulation(), population.currentPopulation()));
+        long calculatedPopulation = legacyPayload
+                ? population.currentPopulation()
+                : population.calculatedPopulationFromEvents();
+        String message = clean(population.reconciliationMessage());
+        if (message == null) {
+            message = "This saved report contained a calculated population of " + calculatedPopulation
+                    + ". Showing " + boundedPopulation
+                    + "; review duplicate, legacy, or incorrect population events.";
+        }
+
+        SelectionReviewPayload.PopulationSummary safePopulation = new SelectionReviewPayload.PopulationSummary(
+                population.initialPopulation(), boundedPopulation, calculatedPopulation, true, message,
+                population.healthRelatedDeaths(), population.healthRelatedLossPercentage(),
+                population.accidentalDeaths(), population.predation(), population.missing(), population.returned(),
+                population.transfersOut(), population.transfersIn(), population.sales(), population.culling(),
+                population.countCorrections(), population.legacyMortalityRecords(), population.sourceEventCount(),
+                population.categoryCounts());
+        SelectionReviewPayload.BatchOverview safeBatch = new SelectionReviewPayload.BatchOverview(
+                batch.batchId(), batch.batchName(), batch.bloodline(), batch.source(), batch.initialPopulation(),
+                boundedPopulation, boundedPopulation + " / " + batch.initialPopulation(), batch.ageDays(),
+                batch.stageName(), batch.startDate(), batch.lastRecordedEventDate());
+        List<SelectionReviewPayload.DataAvailabilityItem> availability = payload.dataAvailability() == null
+                ? new ArrayList<>()
+                : new ArrayList<>(payload.dataAvailability());
+        if (availability.stream().noneMatch(item -> "Population reconciliation".equals(item.section()))) {
+            availability.add(new SelectionReviewPayload.DataAvailabilityItem(
+                    "Population reconciliation", "PARTIAL", population.sourceEventCount(),
+                    batch.lastRecordedEventDate(), message));
+        }
+        return new SelectionReviewPayload(payload.reportTitle(), payload.disclaimer(), payload.payloadVersion(),
+                payload.periodStart(), payload.periodEnd(), payload.asOfDate(), safeBatch, safePopulation,
+                payload.healthEvents(), payload.productUse(), payload.incubation(), payload.finance(), availability,
+                payload.selectionSummary(), payload.reviewInstructions());
     }
 
     private byte[] renderPdf(SelectionReviewResponse response) {
@@ -387,32 +552,59 @@ public class SelectionReviewService {
             PdfWriter.getInstance(document, output);
             document.open();
             SelectionReviewPayload payload = response.payload();
-            document.add(new Paragraph(payload.reportTitle()));
-            document.add(new Paragraph("Batch: " + payload.batch().batchName() + " | Period: "
-                    + response.periodStart() + " to " + response.periodEnd()));
-            document.add(new Paragraph("Report v" + response.versionNumber() + " | Purpose: "
-                    + (response.purpose() == null ? "Routine review" : response.purpose())
-                    + " | Generated: " + response.generatedAt()));
-            document.add(new Paragraph("This report snapshot does not close the batch or stop future records."));
-            document.add(new Paragraph(payload.disclaimer()));
-            document.add(new Paragraph("\nBatch overview"));
+            document.add(new Paragraph("Poultry Prophet · Batch Review"));
+            document.add(new Paragraph(payload.batch().batchName() + " | " + response.periodStart() + " to " + response.periodEnd()));
             document.add(new Paragraph("Population: " + payload.batch().currentPopulationDisplay()
-                    + " | Age: " + payload.batch().ageDays() + " days | Stage: " + payload.batch().stageName()));
+                    + " | Stage: " + payload.batch().stageName() + " | Day " + payload.batch().ageDays()));
+            if (payload.population().reconciliationRequired()) {
+                document.add(new Paragraph("Population record warning: "
+                        + payload.population().reconciliationMessage()));
+            }
+            document.add(new Paragraph("Recorded data only. This report supports human review; it does not diagnose, predict, rank, or automatically select birds."));
+            document.add(new Paragraph("\nSummary"));
+            if (payload.selectionSummary() == null) {
+                document.add(new Paragraph("Selection outcome: No finalized batch-level selection session recorded by the report date."));
+            } else {
+                SelectionReviewPayload.SelectionSummary selection = payload.selectionSummary();
+                document.add(new Paragraph("Selection outcome: " + selection.acceptedCount() + " accepted of "
+                        + selection.evaluatedCount() + " evaluated ("
+                        + (selection.selectionRatePercent() == null ? "rate unavailable" : selection.selectionRatePercent() + "%") + ")"));
+                document.add(new Paragraph("Continue observation: " + selection.continueObservationCount()
+                        + " | Not accepted: " + selection.notAcceptedCount() + " | Other: " + selection.otherCount()));
+                if (selection.criteriaNotes() != null && !selection.criteriaNotes().isBlank()) {
+                    document.add(new Paragraph("Criteria notes: " + selection.criteriaNotes()));
+                }
+                document.add(new Paragraph("This batch-level review does not change the recorded population automatically."));
+            }
+            document.add(new Paragraph("Health-related deaths: " + payload.population().healthRelatedDeaths()
+                    + " (" + (payload.population().healthRelatedLossPercentage() == null ? "rate unavailable" : payload.population().healthRelatedLossPercentage() + "% of start") + ")"));
+            document.add(new Paragraph("Health events: " + payload.healthEvents().size() + " | Products used: " + payload.productUse().size()));
             document.add(new Paragraph("\nPopulation changes"));
             payload.population().categoryCounts().forEach((key, value) -> {
+                if (value == null || value == 0) return;
                 try { document.add(new Paragraph(key + ": " + value)); }
                 catch (DocumentException exception) { throw new PdfRenderException(exception); }
             });
-            document.add(new Paragraph("Health-related loss percentage: "
-                    + (payload.population().healthRelatedLossPercentage() == null ? "Unavailable" : payload.population().healthRelatedLossPercentage() + "%")));
-            document.add(new Paragraph("\nHealth and intervention history"));
-            document.add(new Paragraph("Health events: " + payload.healthEvents().size()
-                    + " | Product-use records: " + payload.productUse().size()));
+            document.add(new Paragraph("\nProducts used"));
+            if (payload.productUse().isEmpty()) {
+                document.add(new Paragraph("No product-use record was found in this period."));
+            } else {
+                Map<String, List<SelectionReviewPayload.ProductUseItem>> grouped = new LinkedHashMap<>();
+                payload.productUse().forEach(item -> grouped.computeIfAbsent(item.productType() + " · " + item.brandName() + " · " + (item.unit() == null ? "unit" : item.unit()), ignored -> new ArrayList<>()).add(item));
+                grouped.forEach((key, items) -> {
+                    try {
+                        double total = items.stream().filter(item -> item.quantity() != null).mapToDouble(SelectionReviewPayload.ProductUseItem::quantity).sum();
+                        boolean complete = items.stream().allMatch(item -> item.quantity() != null);
+                        document.add(new Paragraph(key + ": " + (complete ? total : items.size() + " recorded use(s), quantity incomplete")));
+                    } catch (DocumentException exception) { throw new PdfRenderException(exception); }
+                });
+            }
             if (payload.finance() != null) {
-                document.add(new Paragraph("\nRecorded finance"));
+                document.add(new Paragraph("\nRecorded batch finance"));
                 document.add(new Paragraph("Income: " + payload.finance().recordedIncome()
                         + " | Expense: " + payload.finance().recordedExpense()
                         + " | Net cash flow: " + payload.finance().recordedNetCashFlow()));
+                document.add(new Paragraph("Recorded cash-flow entries only; this is not accounting profit."));
             }
             document.add(new Paragraph("\nManager review"));
             document.add(new Paragraph("Status: " + response.reviewStatus() + " | Notes: "
@@ -422,6 +614,17 @@ public class SelectionReviewService {
         } catch (DocumentException | PdfRenderException exception) {
             throw new IllegalStateException("Could not render selection review PDF", exception);
         }
+    }
+
+    private long populationDelta(BatchEvent event) {
+        if (event.getPopulationDelta() != null) return event.getPopulationDelta();
+        return switch (event.getEventType()) {
+            case HEALTH_DEATH, MORTALITY, ACCIDENTAL_DEATH, SUSPECTED_PREDATION,
+                    CONFIRMED_PREDATION, MISSING, TRANSFER_OUT, SALE, CULLING ->
+                    -(long) event.getAffectedCount();
+            case FOUND_RETURNED, TRANSFER_IN -> (long) event.getAffectedCount();
+            default -> 0L;
+        };
     }
 
     private Double round(double value, int scale) {

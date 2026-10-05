@@ -28,3 +28,8 @@ application-local.yml
 application-dev.yml
 *.pem
 *.key
+validation-artifacts/
+local-backups/
+*.dump
+local-backups/*.sql
+validation-artifacts/*.sql

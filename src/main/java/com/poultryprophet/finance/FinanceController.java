@@ -42,4 +42,12 @@ public class FinanceController {
                                           @AuthenticationPrincipal CustomUserDetails principal) {
         return service.summary(principal.getFarmId(), start, end);
     }
+    @GetMapping("/analytics")
+    public FinanceAnalyticsResponse analytics(@RequestParam(required = false) Long batchId,
+                                              @RequestParam(required = false) LocalDate start,
+                                              @RequestParam(required = false) LocalDate end,
+                                              @AuthenticationPrincipal CustomUserDetails principal) {
+        return service.analytics(principal.getFarmId(), batchId, start, end);
+    }
+
 }

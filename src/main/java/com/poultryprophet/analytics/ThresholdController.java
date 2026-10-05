@@ -5,6 +5,7 @@ import com.poultryprophet.analytics.dto.UpdateThresholdRequest;
 import com.poultryprophet.common.BadRequestException;
 import com.poultryprophet.common.NotFoundException;
 import com.poultryprophet.security.CustomUserDetails;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import jakarta.validation.Valid;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -23,6 +24,7 @@ import java.util.Set;
 /** Legacy provisional indicator thresholds retained outside the primary MVP workflow. */
 @RestController
 @RequestMapping("/api/legacy/thresholds")
+@ConditionalOnProperty(name = "app.features.legacy-indicators-enabled", havingValue = "true")
 public class ThresholdController {
 
     private static final Set<String> MVP_INDICATORS = Set.of("BHI", "BSI", "WFR");

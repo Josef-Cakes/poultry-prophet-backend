@@ -12,6 +12,7 @@ import com.poultryprophet.selection.dto.SelectionRowResponse;
 import com.poultryprophet.selection.dto.SelectionViewResponse;
 import com.poultryprophet.user.User;
 import com.poultryprophet.user.UserRepository;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -26,6 +27,7 @@ import java.util.Map;
  * cut-line; the breeder always makes the final call, and overrides must carry a reason.
  */
 @Service
+@ConditionalOnProperty(name = "app.features.legacy-individual-selection-enabled", havingValue = "true")
 public class SelectionService {
 
     private final ScoringService scoringService;

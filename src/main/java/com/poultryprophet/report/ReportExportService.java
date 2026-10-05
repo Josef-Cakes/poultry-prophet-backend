@@ -16,6 +16,7 @@ import com.poultryprophet.common.BadRequestException;
 import com.poultryprophet.common.NotFoundException;
 import com.poultryprophet.config.ReportProperties;
 import com.poultryprophet.report.dto.ExportResult;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -36,6 +37,7 @@ import java.util.List;
  * stores the artifact on the local filesystem (stands in for object storage).
  */
 @Service
+@ConditionalOnProperty(name = "app.features.legacy-indicators-enabled", havingValue = "true")
 public class ReportExportService {
 
     private static final DateTimeFormatter DATE_FMT =
