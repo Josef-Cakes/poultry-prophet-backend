@@ -14,6 +14,10 @@ public record SyncOperationResult(
         return new SyncOperationResult(id, "APPLIED", serverId, Instant.now(), null);
     }
 
+    public static SyncOperationResult alreadyApplied(UUID id, Long serverId) {
+        return new SyncOperationResult(id, "ALREADY_APPLIED", serverId, Instant.now(), null);
+    }
+
     public static SyncOperationResult rejected(UUID id, String message) {
         return new SyncOperationResult(id, "REJECTED", null, Instant.now(), message);
     }

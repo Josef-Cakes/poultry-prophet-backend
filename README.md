@@ -135,8 +135,13 @@ batches within that farm.
 - `PATCH /api/batches/{id}/restore` *(MANAGER)* — bring an archived batch back to the working list.
 - `POST /api/batches/{id}/records` — record a daily **brooding** entry (1.1); idempotent per (batch, date).
 - `GET  /api/batches/{id}/records?limit=14` — recent submissions.
-- `POST /api/sync/batch` — legacy sync endpoint retained for later review; offline capability is
-  not a validated MVP claim.
+- `POST /api/sync/v2/operations` — authenticated replay endpoint for version-1 `BATCH_EVENT`,
+  batch-linked `FARM_INPUT`, and manager-only `SELECTION_SESSION` draft create/update operations
+  (up to 25 per request). Each operation returns its own applied, already-applied, conflict,
+  rejected, or retryable result. This API supports the browser outbox. Selection-session
+  finalization stays on the normal API so current
+  population rules are checked before it is finalized. Offline/PWA behavior is not a validated MVP
+  claim. The older `POST /api/sync/batch` endpoint remains for legacy daily-record sync.
 - `POST /api/batches/{id}/birds` — band an individual bird (Blueprint 5.4); unique band number per batch.
 - `GET  /api/batches/{id}/birds` — list banded birds.
 - `POST /api/batches/{id}/birds/{birdId}/ranging` — weekly per-bird ranging milestone
