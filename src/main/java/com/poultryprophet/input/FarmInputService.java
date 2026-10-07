@@ -2,6 +2,7 @@ package com.poultryprophet.input;
 
 import com.poultryprophet.batch.BatchService;
 import com.poultryprophet.common.BadRequestException;
+import com.poultryprophet.common.ConflictException;
 import com.poultryprophet.common.NotFoundException;
 import com.poultryprophet.incubation.IncubationCycle;
 import com.poultryprophet.incubation.IncubationService;
@@ -50,9 +51,19 @@ public class FarmInputService {
         if (existing != null) {
             if (!farmId.equals(existing.getFarmId())
                     || !java.util.Objects.equals(request.batchId(), existing.getBatchId())
+                    || !java.util.Objects.equals(request.incubationCycleId(), existing.getIncubationCycleId())
                     || request.productType() != existing.getProductType()
-                    || !request.brandName().trim().equals(existing.getBrandName())) {
-                throw new BadRequestException("operationId has already been used for a different input record");
+                    || !java.util.Objects.equals(request.brandName().trim(), existing.getBrandName())
+                    || !java.util.Objects.equals(trimToNull(request.productName()), existing.getProductName())
+                    || !java.util.Objects.equals(request.quantity(), existing.getQuantity())
+                    || !java.util.Objects.equals(trimToNull(request.unit()), existing.getUnit())
+                    || !java.util.Objects.equals(trimToNull(request.route()), existing.getRoute())
+                    || !java.util.Objects.equals(trimToNull(request.purpose()), existing.getPurpose())
+                    || !java.util.Objects.equals(trimToNull(request.notes()), existing.getNotes())
+                    || (request.recordedAt() != null && !java.util.Objects.equals(request.recordedAt(), existing.getRecordedAt()))
+                    || !java.util.Objects.equals(request.farmProductId(), existing.getFarmProductId())
+                    || !java.util.Objects.equals(request.affectedBirdCount(), existing.getAffectedBirdCount())) {
+                throw new ConflictException("operationId has already been used for a different input record");
             }
             return FarmInputLogResponse.from(existing);
         }
