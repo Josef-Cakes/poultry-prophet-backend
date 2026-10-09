@@ -16,14 +16,21 @@ import com.poultryprophet.selectionsession.BatchSelectionSessionRepository;
 import com.poultryprophet.selectionsession.CreateSelectionSessionRequest;
 import com.poultryprophet.selectionsession.SelectionSessionResponse;
 import com.poultryprophet.selectionsession.SelectionSessionService;
+import com.poultryprophet.sexcomposition.BatchSexCompositionService;
+import com.poultryprophet.sexcomposition.dto.CreateSexCompositionRequest;
+import com.poultryprophet.sexcomposition.dto.SexCompositionResponse;
 import com.poultryprophet.sync.dto.SyncOperationRequest;
 import com.poultryprophet.sync.dto.SyncOperationResult;
 import com.poultryprophet.sync.dto.SyncOperationsRequest;
 import com.poultryprophet.sync.dto.SyncOperationsResponse;
 import com.poultryprophet.user.Role;
+import com.poultryprophet.vaccination.VaccinationService;
+import com.poultryprophet.vaccination.dto.RecordVaccinationRequest;
+import com.poultryprophet.vaccination.dto.VaccinationPlanItemResponse;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validator;
+import org.springframework.beans.factory.annotation.Autowired;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
@@ -43,13 +50,18 @@ public class SyncOperationService {
     private final SelectionSessionService selectionSessionService;
     private final BatchSelectionSessionRepository selectionSessionRepository;
     private final Validator validator;
+    private final BatchSexCompositionService sexCompositionService;
+    private final VaccinationService vaccinationService;
 
+    @Autowired
     public SyncOperationService(ObjectMapper objectMapper, BatchEventService eventService,
                                 FarmInputService inputService, BatchEventRepository eventRepository,
                                 FarmInputLogRepository inputRepository,
                                 SelectionSessionService selectionSessionService,
                                 BatchSelectionSessionRepository selectionSessionRepository,
-                                Validator validator) {
+                                Validator validator,
+                                BatchSexCompositionService sexCompositionService,
+                                VaccinationService vaccinationService) {
         this.objectMapper = objectMapper;
         this.eventService = eventService;
         this.inputService = inputService;
@@ -58,6 +70,19 @@ public class SyncOperationService {
         this.selectionSessionService = selectionSessionService;
         this.selectionSessionRepository = selectionSessionRepository;
         this.validator = validator;
+        this.sexCompositionService = sexCompositionService;
+        this.vaccinationService = vaccinationService;
+    }
+
+    /** Compatibility constructor for focused sync tests that do not exercise sex or vaccination replay. */
+    public SyncOperationService(ObjectMapper objectMapper, BatchEventService eventService,
+                                FarmInputService inputService, BatchEventRepository eventRepository,
+                                FarmInputLogRepository inputRepository,
+                                SelectionSessionService selectionSessionService,
+                                BatchSelectionSessionRepository selectionSessionRepository,
+                                Validator validator) {
+        this(objectMapper, eventService, inputService, eventRepository, inputRepository,
+                selectionSessionService, selectionSessionRepository, validator, null, null);
     }
 
     public SyncOperationsResponse sync(SyncOperationsRequest request, Long farmId, Long userId, Role role) {
@@ -166,6 +191,20 @@ public class SyncOperationService {
                 }
                 SelectionSessionResponse saved = selectionSessionService.updateDraft(
                         operation.batchId(), farmId, sessionId, payload);
+                yield SyncOperationResult.applied(operation.operationId(), saved.id());
+            }
+            case "SEX_COMPOSITION" -> {
+                CreateSexCompositionRequest payload = objectMapper.convertValue(operation.payload(), CreateSexCompositionRequest.class);
+                if (!operation.operationId().equals(payload.operationId())) throw new BadRequestException("The operation ID does not match the sex composition payload");
+                SexCompositionResponse saved = sexCompositionService.record(operation.batchId(), farmId, userId, payload);
+                yield SyncOperationResult.applied(operation.operationId(), saved.id());
+            }
+            case "VACCINATION_PLAN" -> {
+                Long planId = operation.payload().path("planId").asLong(0);
+                if (planId <= 0) throw new BadRequestException("Vaccination sync payload is missing planId");
+                RecordVaccinationRequest payload = objectMapper.convertValue(operation.payload(), RecordVaccinationRequest.class);
+                if (!operation.operationId().equals(payload.operationId())) throw new BadRequestException("The operation ID does not match the vaccination payload");
+                VaccinationPlanItemResponse saved = vaccinationService.record(planId, farmId, userId, role, payload);
                 yield SyncOperationResult.applied(operation.operationId(), saved.id());
             }
             default -> throw new BadRequestException("Unsupported offline operation: " + operation.entityType());

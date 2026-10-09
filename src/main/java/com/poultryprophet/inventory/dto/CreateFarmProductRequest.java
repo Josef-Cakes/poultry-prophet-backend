@@ -13,6 +13,7 @@ public record CreateFarmProductRequest(
         String packageDescription,
         @NotBlank String stockUnit,
         @DecimalMin(value = "0.0") BigDecimal openingQuantity,
+        @DecimalMin(value = "0.0") BigDecimal openingUnitCost,
         @DecimalMin(value = "0.0") BigDecimal reorderLevel,
         Boolean allowFractionalQuantity
 ) {}

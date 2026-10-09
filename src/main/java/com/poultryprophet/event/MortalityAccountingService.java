@@ -7,15 +7,21 @@ import com.poultryprophet.common.BadRequestException;
 import com.poultryprophet.common.ConflictException;
 import com.poultryprophet.common.DateValidationService;
 import com.poultryprophet.event.dto.CreateBatchEventRequest;
+import com.poultryprophet.population.PopulationProjection;
+import com.poultryprophet.population.PopulationProjectionService;
 import com.poultryprophet.record.DailyRecord;
 import com.poultryprophet.record.DailyRecordRepository;
 import com.poultryprophet.record.event.RecordCreatedEvent;
+import com.poultryprophet.sexcomposition.SexCompositionProjectionService;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
+import java.util.ArrayList;
+import java.util.List;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
@@ -33,19 +39,25 @@ public class MortalityAccountingService {
     private final DailyRecordRepository recordRepository;
     private final ApplicationEventPublisher publisher;
     private final DateValidationService dateValidation;
+    private final PopulationProjectionService populationProjectionService;
+    private final SexCompositionProjectionService sexCompositionProjectionService;
 
     public MortalityAccountingService(BatchService batchService,
                                       BatchRepository batchRepository,
                                       BatchEventRepository eventRepository,
                                       DailyRecordRepository recordRepository,
                                       ApplicationEventPublisher publisher,
-                                      DateValidationService dateValidation) {
+                                      DateValidationService dateValidation,
+                                      PopulationProjectionService populationProjectionService,
+                                      SexCompositionProjectionService sexCompositionProjectionService) {
         this.batchService = batchService;
         this.batchRepository = batchRepository;
         this.eventRepository = eventRepository;
         this.recordRepository = recordRepository;
         this.publisher = publisher;
         this.dateValidation = dateValidation;
+        this.populationProjectionService = populationProjectionService;
+        this.sexCompositionProjectionService = sexCompositionProjectionService;
     }
 
     @Transactional
@@ -63,6 +75,7 @@ public class MortalityAccountingService {
         EventType type = normalize(request.eventType());
         LocalDate date = dateValidation.resolve(request.eventDate());
         Batch batch = batchService.requireBatchForUpdate(batchId, farmId);
+        batchService.ensureWritable(batch);
 
         int delta;
         try {
@@ -80,6 +93,9 @@ public class MortalityAccountingService {
                         || existing.getAffectedCount() != request.affectedCount()
                         || !java.util.Objects.equals(existing.getSeverityLabel(), request.severityLabel())
                         || !java.util.Objects.equals(existing.getPopulationDelta(), delta)
+                        || !java.util.Objects.equals(existing.getMaleDelta(), maleDelta(request))
+                        || !java.util.Objects.equals(existing.getFemaleDelta(), femaleDelta(request))
+                        || !java.util.Objects.equals(existing.getUnclassifiedDelta(), unclassifiedDelta(request))
                         || (existing.getTitle() != null && !java.util.Objects.equals(existing.getTitle(), request.title()))
                         || (existing.getDetails() != null && !java.util.Objects.equals(existing.getDetails(), request.details()))
                         || (existing.getTags() != null && !java.util.Objects.equals(existing.getTags(), request.tags()))) {
@@ -103,9 +119,12 @@ public class MortalityAccountingService {
         event.setSeverityLabel(request.severityLabel());
         event.setAffectedCount(request.affectedCount());
         event.setPopulationDelta(delta);
+        applySexAllocation(batch, farmId, date, type, delta, request, event);
         event.setTitle(request.title());
         event.setDetails(request.details());
         event.setTags(request.tags());
+
+        validateChronologicalProjection(batch, date, event);
 
         return persistCanonicalEvent(batch, date, event, delta);
     }
@@ -118,6 +137,7 @@ public class MortalityAccountingService {
     public int reconcileLegacyMortality(Long batchId, Long farmId, Long handlerId,
                                         LocalDate date, Integer requestedMortalityCount) {
         Batch batch = batchService.requireBatchForUpdate(batchId, farmId);
+        batchService.ensureWritable(batch);
         LocalDate selectedDate = dateValidation.resolve(date);
         dateValidation.validate(selectedDate, batch.getStartDate());
         DailyRecord existingRecord = recordRepository.findByBatchIdAndRecordDate(batchId, selectedDate)
@@ -171,10 +191,10 @@ public class MortalityAccountingService {
             syncDailyRecord(date, batch.getId(), totalForDate);
         }
 
-        if (event.getEventType().isHealthMortality()) {
+        if (event.getEventType().isDeathEvent()) {
             publisher.publishEvent(new MortalityRecordedEvent(
                     saved.getId(), batch.getId(), event.getHandlerId(), date,
-                    event.getAffectedCount(), remainingPopulation, event.getTitle()));
+                    event.getEventType(), event.getAffectedCount(), remainingPopulation, event.getTitle()));
         }
         return new MortalityAccountingResult(saved, remainingPopulation);
     }
@@ -214,6 +234,34 @@ public class MortalityAccountingService {
         }
     }
 
+    /**
+     * A backdated event must be safe at every chronological point, not merely against the count
+     * currently stored on the batch row. This protects the append-only ledger from creating a
+     * temporary negative balance that a later event happens to hide.
+     */
+    private void validateChronologicalProjection(Batch batch, LocalDate date, BatchEvent candidate) {
+        LocalDate projectionEnd = dateValidation.today();
+        if (projectionEnd == null || projectionEnd.isBefore(date)) projectionEnd = date;
+        List<BatchEvent> existing = eventRepository
+                .findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(
+                        batch.getId(), batch.getStartDate(), projectionEnd);
+        PopulationProjection existingProjection = populationProjectionService.project(
+                batch, existing, projectionEnd, ZoneId.of("Asia/Manila"));
+        if (existingProjection.reconciliationRequired()) {
+            throw new BadRequestException("This batch needs population reconciliation before new events can sync: "
+                    + existingProjection.reconciliationMessage());
+        }
+
+        List<BatchEvent> withCandidate = new ArrayList<>(existing);
+        withCandidate.add(candidate);
+        PopulationProjection projection = populationProjectionService.projectLedger(
+                batch, withCandidate, projectionEnd, ZoneId.of("Asia/Manila"));
+        if (projection.reconciliationRequired()) {
+            throw new BadRequestException("This event would create an invalid chronological population ledger: "
+                    + projection.reconciliationMessage());
+        }
+    }
+
     private EventType normalize(EventType type) {
         return type == EventType.MORTALITY ? EventType.HEALTH_DEATH : type;
     }
@@ -228,11 +276,62 @@ public class MortalityAccountingService {
         event.setSeverityLabel(request.severityLabel());
         event.setAffectedCount(request.affectedCount());
         event.setPopulationDelta(-request.affectedCount());
+        event.setMaleDelta(maleDelta(request));
+        event.setFemaleDelta(femaleDelta(request));
+        event.setUnclassifiedDelta(unclassifiedDelta(request));
         event.setTitle(request.title());
         event.setDetails(request.details());
         event.setTags(request.tags());
         event.setSalePurpose(SalePurposeParser.parse(request.eventType(), request.tags()));
         return event;
+    }
+
+    private void applySexAllocation(Batch batch, Long farmId, LocalDate date, EventType type, int populationDelta,
+                                    CreateBatchEventRequest request, BatchEvent event) {
+        CreateBatchEventRequest.SexAllocation allocation = request.sexAllocation();
+        boolean any = allocation != null
+                && (allocation.maleDelta() != null || allocation.femaleDelta() != null
+                || allocation.unclassifiedDelta() != null);
+        boolean hasBaseline = sexCompositionProjectionService != null
+                && sexCompositionProjectionService.hasBaseline(batch.getId(), farmId, date);
+        if (!any) {
+            if (hasBaseline) {
+                throw new BadRequestException("Select whether the affected birds were male, female, unclassified, or mixed");
+            }
+            return;
+        }
+        if (!allocation.isComplete()) {
+            throw new BadRequestException("Male, female, and unclassified allocations must all be provided");
+        }
+        if (allocation.totalDelta() != populationDelta) {
+            throw new BadRequestException("Male + female + unclassified changes must equal the population change");
+        }
+        if (type != EventType.COUNT_CORRECTION) {
+            boolean addition = populationDelta > 0;
+            if ((addition && (allocation.maleDelta() < 0 || allocation.femaleDelta() < 0 || allocation.unclassifiedDelta() < 0))
+                    || (!addition && (allocation.maleDelta() > 0 || allocation.femaleDelta() > 0 || allocation.unclassifiedDelta() > 0))) {
+                throw new BadRequestException("Sex allocations must use the same direction as the population event");
+            }
+        }
+        if (sexCompositionProjectionService == null) {
+            throw new BadRequestException("Sex composition validation is unavailable; try again");
+        }
+        event.setMaleDelta(allocation.maleDelta());
+        event.setFemaleDelta(allocation.femaleDelta());
+        event.setUnclassifiedDelta(allocation.unclassifiedDelta());
+        sexCompositionProjectionService.validateCandidate(batch, farmId, date, event);
+    }
+
+    private Integer maleDelta(CreateBatchEventRequest request) {
+        return request.sexAllocation() == null ? null : request.sexAllocation().maleDelta();
+    }
+
+    private Integer femaleDelta(CreateBatchEventRequest request) {
+        return request.sexAllocation() == null ? null : request.sexAllocation().femaleDelta();
+    }
+
+    private Integer unclassifiedDelta(CreateBatchEventRequest request) {
+        return request.sexAllocation() == null ? null : request.sexAllocation().unclassifiedDelta();
     }
 
     public record MortalityAccountingResult(BatchEvent event, int remainingPopulation) {

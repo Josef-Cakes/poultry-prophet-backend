@@ -4,6 +4,7 @@ import com.poultryprophet.batch.Batch;
 import com.poultryprophet.batch.BatchService;
 import com.poultryprophet.common.BadRequestException;
 import com.poultryprophet.event.BatchEventRepository;
+import com.poultryprophet.population.PopulationProjectionService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -124,7 +125,8 @@ class SelectionSessionServiceTest {
     }
 
     private SelectionSessionService service() {
-        return new SelectionSessionService(repository, eventRepository, batchService, "Asia/Manila");
+        return new SelectionSessionService(repository, eventRepository, batchService,
+                new PopulationProjectionService(), "Asia/Manila");
     }
 
     private static Batch batch(int initialPopulation, LocalDate startDate) {

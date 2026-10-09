@@ -28,7 +28,7 @@ public class BirdService {
 
     @Transactional
     public BirdResponse band(Long batchId, Long farmId, CreateBirdRequest request) {
-        Batch batch = batchService.requireBatch(batchId, farmId);
+        Batch batch = batchService.requireWritableBatch(batchId, farmId);
         if (birdRepository.existsByBatchIdAndBandNumberIgnoreCase(batchId, request.bandNumber())) {
             throw new BadRequestException(
                     "Band number '" + request.bandNumber() + "' already exists in this batch");
@@ -52,6 +52,14 @@ public class BirdService {
     @Transactional(readOnly = true)
     public Bird requireBird(Long birdId, Long batchId, Long farmId) {
         batchService.requireBatch(batchId, farmId);
+        return birdRepository.findByIdAndBatchId(birdId, batchId)
+                .orElseThrow(() -> new NotFoundException("Bird " + birdId + " not found in batch " + batchId));
+    }
+
+    /** Same lookup for ranging/selection writes; archived batches remain viewable but immutable. */
+    @Transactional(readOnly = true)
+    public Bird requireWritableBird(Long birdId, Long batchId, Long farmId) {
+        batchService.requireWritableBatch(batchId, farmId);
         return birdRepository.findByIdAndBatchId(birdId, batchId)
                 .orElseThrow(() -> new NotFoundException("Bird " + birdId + " not found in batch " + batchId));
     }

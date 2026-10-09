@@ -17,6 +17,11 @@ public class InventoryMovement {
     @Enumerated(EnumType.STRING) @Column(name = "movement_type", nullable = false, length = 32) private InventoryMovementType movementType;
     @Column(name = "quantity_delta", nullable = false, precision = 14, scale = 3) private BigDecimal quantityDelta;
     @Column(name = "balance_after", nullable = false, precision = 14, scale = 3) private BigDecimal balanceAfter;
+    @Column(name = "unit_cost_snapshot", precision = 16, scale = 6) private BigDecimal unitCostSnapshot;
+    @Column(name = "inventory_value_delta", precision = 16, scale = 2) private BigDecimal inventoryValueDelta;
+    @Enumerated(EnumType.STRING) @Column(name = "cost_status", length = 16)
+    private InventoryValuationStatus costStatus;
+    @Column(name = "costed_at") private Instant costedAt;
     @Column(nullable = false) private Instant occurredAt;
     @Column(name = "batch_id") private Long batchId;
     @Column(name = "farm_input_log_id") private Long farmInputLogId;
@@ -39,6 +44,14 @@ public class InventoryMovement {
     public void setQuantityDelta(BigDecimal quantityDelta) { this.quantityDelta = quantityDelta; }
     public BigDecimal getBalanceAfter() { return balanceAfter; }
     public void setBalanceAfter(BigDecimal balanceAfter) { this.balanceAfter = balanceAfter; }
+    public BigDecimal getUnitCostSnapshot() { return unitCostSnapshot; }
+    public void setUnitCostSnapshot(BigDecimal unitCostSnapshot) { this.unitCostSnapshot = unitCostSnapshot; }
+    public BigDecimal getInventoryValueDelta() { return inventoryValueDelta; }
+    public void setInventoryValueDelta(BigDecimal inventoryValueDelta) { this.inventoryValueDelta = inventoryValueDelta; }
+    public InventoryValuationStatus getCostStatus() { return costStatus; }
+    public void setCostStatus(InventoryValuationStatus costStatus) { this.costStatus = costStatus; }
+    public Instant getCostedAt() { return costedAt; }
+    public void setCostedAt(Instant costedAt) { this.costedAt = costedAt; }
     public Instant getOccurredAt() { return occurredAt; }
     public void setOccurredAt(Instant occurredAt) { this.occurredAt = occurredAt; }
     public Long getBatchId() { return batchId; }

@@ -6,7 +6,8 @@ import com.poultryprophet.common.BadRequestException;
 import com.poultryprophet.common.NotFoundException;
 import com.poultryprophet.event.BatchEvent;
 import com.poultryprophet.event.BatchEventRepository;
-import com.poultryprophet.event.EventType;
+import com.poultryprophet.population.PopulationProjection;
+import com.poultryprophet.population.PopulationProjectionService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -35,15 +36,18 @@ public class SelectionSessionService {
     private final BatchSelectionSessionRepository repository;
     private final BatchEventRepository eventRepository;
     private final BatchService batchService;
+    private final PopulationProjectionService populationProjectionService;
     private final ZoneId farmZone;
 
     public SelectionSessionService(BatchSelectionSessionRepository repository,
                                    BatchEventRepository eventRepository,
                                    BatchService batchService,
+                                   PopulationProjectionService populationProjectionService,
                                    @Value("${app.time-zone:Asia/Manila}") String timeZone) {
         this.repository = repository;
         this.eventRepository = eventRepository;
         this.batchService = batchService;
+        this.populationProjectionService = populationProjectionService;
         this.farmZone = ZoneId.of(timeZone);
     }
 
@@ -52,6 +56,7 @@ public class SelectionSessionService {
                                            CreateSelectionSessionRequest request,
                                            Long supersedesSessionId) {
         Batch batch = batchService.requireBatch(batchId, farmId);
+        batchService.ensureWritable(batch);
         CreateSelectionSessionRequest safe = requireRequest(request);
         UUID operationId = safe.operationId() == null ? UUID.randomUUID() : safe.operationId();
         LocalDate selectionDate = safe.selectionDate() == null ? today() : safe.selectionDate();
@@ -110,6 +115,7 @@ public class SelectionSessionService {
     public SelectionSessionResponse updateDraft(Long batchId, Long farmId, Long sessionId,
                                                 CreateSelectionSessionRequest request) {
         Batch batch = batchService.requireBatch(batchId, farmId);
+        batchService.ensureWritable(batch);
         BatchSelectionSession session = find(batchId, farmId, sessionId);
         if (session.getStatus() != SelectionSessionStatus.DRAFT) {
             throw new BadRequestException("Only a draft selection session can be edited");
@@ -133,6 +139,7 @@ public class SelectionSessionService {
     @Transactional
     public SelectionSessionResponse finalize(Long batchId, Long farmId, Long sessionId) {
         Batch batch = batchService.requireBatch(batchId, farmId);
+        batchService.ensureWritable(batch);
         BatchSelectionSession session = find(batchId, farmId, sessionId);
         if (session.getStatus() == SelectionSessionStatus.FINALIZED) {
             return toResponse(session);
@@ -220,23 +227,12 @@ public class SelectionSessionService {
     private long populationAt(Batch batch, LocalDate date) {
         List<BatchEvent> events = eventRepository
                 .findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(batch.getId(), batch.getStartDate(), date);
-        long population = batch.getInitialPopulation();
-        for (BatchEvent event : events) {
-            population += populationDelta(event);
+        PopulationProjection projection = populationProjectionService.project(batch, events, date, farmZone);
+        if (projection.validPopulation() == null) {
+            throw new BadRequestException("Population records need reconciliation before selection can be recorded"
+                    + (projection.reconciliationMessage() == null ? "" : ": " + projection.reconciliationMessage()));
         }
-        return Math.max(0L, population);
-    }
-
-    private long populationDelta(BatchEvent event) {
-        if (event.getPopulationDelta() != null) return event.getPopulationDelta();
-        EventType type = event.getEventType();
-        if (type == null) return 0;
-        return switch (type) {
-            case HEALTH_DEATH, MORTALITY, ACCIDENTAL_DEATH, SUSPECTED_PREDATION,
-                    CONFIRMED_PREDATION, MISSING, TRANSFER_OUT, SALE, CULLING -> -(long) event.getAffectedCount();
-            case FOUND_RETURNED, TRANSFER_IN -> (long) event.getAffectedCount();
-            default -> 0L;
-        };
+        return projection.validPopulation();
     }
 
     private boolean sameOperation(BatchSelectionSession existing, Long reviewerId,

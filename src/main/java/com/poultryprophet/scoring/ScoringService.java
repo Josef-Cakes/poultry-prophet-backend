@@ -65,7 +65,7 @@ public class ScoringService {
     /** Recomputes and persists scores for every bird in the batch; returns them ranked by CRS desc. */
     @Transactional
     public List<BirdScore> recomputeForBatch(Long batchId, Long farmId) {
-        Batch batch = batchService.requireBatch(batchId, farmId);
+        Batch batch = batchService.requireWritableBatch(batchId, farmId);
         double bhi = computeBhi(batch);
         for (Bird bird : birdRepository.findByBatchIdOrderByBandNumberAsc(batchId)) {
             scoreBird(bird, batch, bhi);

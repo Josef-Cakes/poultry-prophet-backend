@@ -14,6 +14,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -36,6 +37,17 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ConflictException.class)
     public ResponseEntity<ApiError> handleConflict(ConflictException ex) {
         return build(HttpStatus.CONFLICT, ex.getMessage());
+    }
+
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ApiError> handleDataIntegrity(DataIntegrityViolationException ex,
+                                                        HttpServletRequest request) {
+        // Keep database constraint failures actionable instead of exposing a generic 500. The
+        // detailed SQL remains server-side; the client receives a safe next step.
+        log.error("Database constraint rejected request: method={} uri={}",
+                request.getMethod(), request.getRequestURI(), ex);
+        return build(HttpStatus.CONFLICT,
+                "The request conflicts with the current farm records. Refresh the batch and try again.");
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

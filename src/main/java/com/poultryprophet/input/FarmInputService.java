@@ -12,6 +12,7 @@ import com.poultryprophet.inventory.InventoryService;
 import com.poultryprophet.inventory.InventoryStatus;
 import com.poultryprophet.inventory.dto.InventoryUseResult;
 import com.poultryprophet.user.Role;
+import com.poultryprophet.vaccination.VaccinationInputLinker;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,19 +28,27 @@ public class FarmInputService {
     private final BatchService batchService;
     private final IncubationService incubationService;
     private final InventoryService inventoryService;
+    private final VaccinationInputLinker vaccinationInputLinker;
 
     public FarmInputService(FarmInputLogRepository repository, BatchService batchService,
                             IncubationService incubationService) {
-        this(repository, batchService, incubationService, null);
+        this(repository, batchService, incubationService, null, null);
+    }
+
+    public FarmInputService(FarmInputLogRepository repository, BatchService batchService,
+                            IncubationService incubationService, InventoryService inventoryService) {
+        this(repository, batchService, incubationService, inventoryService, null);
     }
 
     @Autowired
     public FarmInputService(FarmInputLogRepository repository, BatchService batchService,
-                            IncubationService incubationService, InventoryService inventoryService) {
+                            IncubationService incubationService, InventoryService inventoryService,
+                            VaccinationInputLinker vaccinationInputLinker) {
         this.repository = repository;
         this.batchService = batchService;
         this.incubationService = incubationService;
         this.inventoryService = inventoryService;
+        this.vaccinationInputLinker = vaccinationInputLinker;
     }
 
     @Transactional
@@ -65,12 +74,13 @@ public class FarmInputService {
                     || !java.util.Objects.equals(request.affectedBirdCount(), existing.getAffectedBirdCount())) {
                 throw new ConflictException("operationId has already been used for a different input record");
             }
+            if (vaccinationInputLinker != null) vaccinationInputLinker.linkIfScheduled(existing);
             return FarmInputLogResponse.from(existing);
         }
         if (request.batchId() == null && request.incubationCycleId() == null) {
             throw new BadRequestException("Link the input to a batch or incubation cycle");
         }
-        if (request.batchId() != null) batchService.requireBatch(request.batchId(), farmId);
+        if (request.batchId() != null) batchService.requireWritableBatch(request.batchId(), farmId);
         if (request.incubationCycleId() != null) incubationService.require(request.incubationCycleId(), farmId);
         if (request.productType() == InputProductType.MEDICINE || request.productType() == InputProductType.VACCINE) {
             if (request.purpose() == null || request.purpose().isBlank()) {
@@ -97,11 +107,18 @@ public class FarmInputService {
         log.setInventoryStatus(request.farmProductId() == null
                 ? InventoryStatus.UNTRACKED : InventoryStatus.PENDING_STOCK_REVIEW);
         FarmInputLog saved = repository.save(log);
-        if (inventoryService != null && request.farmProductId() != null && request.quantity() != null) {
+        if (vaccinationInputLinker != null) vaccinationInputLinker.linkIfScheduled(saved);
+        if (inventoryService != null && request.farmProductId() != null) {
+            if (request.quantity() == null) {
+                throw new BadRequestException("Enter the units used for a catalog product so stock and batch cost can be updated");
+            }
             InventoryUseResult result = inventoryService.applyUsage(farmId, userId, request.farmProductId(),
-                    java.math.BigDecimal.valueOf(request.quantity()), saved.getRecordedAt(), saved.getBatchId(), saved.getId());
+                    request.quantity(), saved.getRecordedAt(), saved.getBatchId(), saved.getId(), operationId);
             saved.setInventoryMovementId(result.movementId());
             saved.setInventoryStatus(InventoryStatus.valueOf(result.status()));
+            saved.setUnitCostSnapshot(result.unitCost());
+            saved.setCalculatedCost(result.batchCost());
+            saved.setCostStatus(result.costStatus());
             saved = repository.save(saved);
         }
         return FarmInputLogResponse.from(saved);

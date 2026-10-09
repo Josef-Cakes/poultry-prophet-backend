@@ -3,9 +3,9 @@ package com.poultryprophet.event;
 public enum EventType {
     /** Legacy ambiguous value retained for read-only reconciliation of existing rows. */
     @Deprecated
-    MORTALITY(-1, false, true),
-    HEALTH_DEATH(-1, true, true),
-    ACCIDENTAL_DEATH(-1, false, true),
+    MORTALITY(-1, false, true, true),
+    HEALTH_DEATH(-1, true, true, true),
+    ACCIDENTAL_DEATH(-1, false, true, true),
     SUSPECTED_PREDATION(-1, false, true),
     CONFIRMED_PREDATION(-1, false, true),
     MISSING(-1, false, true),
@@ -22,19 +22,30 @@ public enum EventType {
     private final int populationSign;
     private final boolean healthMortality;
     private final boolean populationLedgerEvent;
+    private final boolean deathEvent;
 
     EventType() {
-        this(0, false, false);
+        this(0, false, false, false);
     }
 
     EventType(int populationSign, boolean healthMortality, boolean populationLedgerEvent) {
+        this(populationSign, healthMortality, populationLedgerEvent, false);
+    }
+
+    EventType(int populationSign, boolean healthMortality, boolean populationLedgerEvent, boolean deathEvent) {
         this.populationSign = populationSign;
         this.healthMortality = healthMortality;
         this.populationLedgerEvent = populationLedgerEvent;
+        this.deathEvent = deathEvent;
     }
 
     public boolean isHealthMortality() {
         return healthMortality;
+    }
+
+    /** True for population events that represent a bird death, including accidental deaths. */
+    public boolean isDeathEvent() {
+        return deathEvent;
     }
 
     public boolean isPopulationLedgerEvent() {

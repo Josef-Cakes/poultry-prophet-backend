@@ -20,6 +20,10 @@ public class FarmProduct {
     @Column(name = "package_description") private String packageDescription;
     @Column(name = "stock_unit", nullable = false, length = 32) private String stockUnit;
     @Column(name = "stock_on_hand", nullable = false, precision = 14, scale = 3) private BigDecimal stockOnHand = BigDecimal.ZERO;
+    @Column(name = "average_unit_cost", precision = 16, scale = 6) private BigDecimal averageUnitCost;
+    @Column(nullable = false, length = 3) private String currency = "PHP";
+    @Enumerated(EnumType.STRING) @Column(name = "valuation_status", nullable = false, length = 16)
+    private InventoryValuationStatus valuationStatus = InventoryValuationStatus.UNVALUED;
     @Column(name = "reorder_level", precision = 14, scale = 3) private BigDecimal reorderLevel;
     @Column(name = "allow_fractional_quantity", nullable = false) private boolean allowFractionalQuantity = true;
     @Column(nullable = false) private boolean active = true;
@@ -44,6 +48,12 @@ public class FarmProduct {
     public void setStockUnit(String stockUnit) { this.stockUnit = stockUnit; }
     public BigDecimal getStockOnHand() { return stockOnHand; }
     public void setStockOnHand(BigDecimal stockOnHand) { this.stockOnHand = stockOnHand; }
+    public BigDecimal getAverageUnitCost() { return averageUnitCost; }
+    public void setAverageUnitCost(BigDecimal averageUnitCost) { this.averageUnitCost = averageUnitCost; }
+    public String getCurrency() { return currency; }
+    public void setCurrency(String currency) { this.currency = currency; }
+    public InventoryValuationStatus getValuationStatus() { return valuationStatus; }
+    public void setValuationStatus(InventoryValuationStatus valuationStatus) { this.valuationStatus = valuationStatus; }
     public BigDecimal getReorderLevel() { return reorderLevel; }
     public void setReorderLevel(BigDecimal reorderLevel) { this.reorderLevel = reorderLevel; }
     public boolean isAllowFractionalQuantity() { return allowFractionalQuantity; }

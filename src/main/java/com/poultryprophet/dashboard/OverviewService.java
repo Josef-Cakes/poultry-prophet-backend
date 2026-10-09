@@ -3,7 +3,6 @@ package com.poultryprophet.dashboard;
 import com.poultryprophet.alert.AlertRepository;
 import com.poultryprophet.alert.dto.AlertResponse;
 import com.poultryprophet.batch.Batch;
-import com.poultryprophet.batch.BatchHandlerAssignmentRepository;
 import com.poultryprophet.batch.BatchService;
 import com.poultryprophet.batch.dto.BatchResponse;
 import com.poultryprophet.dashboard.dto.BatchOverviewResponse;
@@ -22,16 +21,13 @@ public class OverviewService {
     private static final int RECENT_RECORD_LIMIT = 30;
 
     private final BatchService batchService;
-    private final BatchHandlerAssignmentRepository assignmentRepository;
     private final DailyRecordRepository recordRepository;
     private final AlertRepository alertRepository;
 
     public OverviewService(BatchService batchService,
-                           BatchHandlerAssignmentRepository assignmentRepository,
                            DailyRecordRepository recordRepository,
                            AlertRepository alertRepository) {
         this.batchService = batchService;
-        this.assignmentRepository = assignmentRepository;
         this.recordRepository = recordRepository;
         this.alertRepository = alertRepository;
     }
@@ -40,10 +36,7 @@ public class OverviewService {
     public BatchOverviewResponse getOverview(Long batchId, Long farmId) {
         Batch batch = batchService.requireBatch(batchId, farmId);
 
-        BatchService.StageView stageView = batchService.resolveStage(batch);
-        BatchResponse batchResponse = BatchResponse.from(
-                batch, assignmentRepository.findHandlerUserIdsByBatchId(batchId),
-                stageView.stage(), stageView.auto());
+        BatchResponse batchResponse = batchService.responseFor(batch);
 
         List<DailyRecordResponse> recentRecords = recordRepository
                 .findByBatchIdOrderByRecordDateDesc(batchId, PageRequest.of(0, RECENT_RECORD_LIMIT))

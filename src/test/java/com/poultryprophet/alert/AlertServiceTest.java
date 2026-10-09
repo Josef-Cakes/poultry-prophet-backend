@@ -7,6 +7,7 @@ import com.poultryprophet.batch.BatchRepository;
 import com.poultryprophet.batch.BatchService;
 import com.poultryprophet.event.BatchEvent;
 import com.poultryprophet.event.BatchEventRepository;
+import com.poultryprophet.event.EventType;
 import com.poultryprophet.event.MortalityRecordedEvent;
 import com.poultryprophet.realtime.RealtimeNotificationService;
 import com.poultryprophet.user.User;
@@ -54,7 +55,8 @@ class AlertServiceTest {
         when(alertRepository.save(any(Alert.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         service.onMortalityRecorded(new MortalityRecordedEvent(
-                99L, 10L, 21L, LocalDate.of(2026, 9, 12), 3, 52, "Heat stress"));
+                99L, 10L, 21L, LocalDate.of(2026, 9, 12), EventType.HEALTH_DEATH,
+                3, 52, "Heat stress"));
 
         ArgumentCaptor<Alert> captor = ArgumentCaptor.forClass(Alert.class);
         verify(alertRepository).save(captor.capture());
@@ -71,6 +73,31 @@ class AlertServiceTest {
     }
 
     @Test
+    void createsWarningAlertForAccidentalDeath() {
+        Batch batch = batch(42);
+        User handler = handler("Pedro Santos");
+        BatchEvent source = new BatchEvent();
+        source.setId(100L);
+        when(alertRepository.existsBySourceEvent_Id(100L)).thenReturn(false);
+        when(batchRepository.getReferenceById(10L)).thenReturn(batch);
+        when(userRepository.findById(21L)).thenReturn(Optional.of(handler));
+        when(batchEventRepository.getReferenceById(100L)).thenReturn(source);
+        when(alertRepository.save(any(Alert.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.onMortalityRecorded(new MortalityRecordedEvent(
+                100L, 10L, 21L, LocalDate.of(2026, 9, 12), EventType.ACCIDENTAL_DEATH,
+                10, 42, "Accidental death"));
+
+        ArgumentCaptor<Alert> captor = ArgumentCaptor.forClass(Alert.class);
+        verify(alertRepository).save(captor.capture());
+        Alert alert = captor.getValue();
+        assertThat(alert.getIndicatorType()).isEqualTo("ACCIDENTAL_DEATH");
+        assertThat(alert.getSeverity()).isEqualTo(Severity.WARNING);
+        assertThat(alert.getMessage()).contains("10 accidental deaths");
+        verify(realtime).publishAlertCreated(alert);
+    }
+
+    @Test
     void usesCriticalSeverityWhenMortalityEmptiesTheBatch() {
         Batch batch = batch(0);
         when(alertRepository.existsBySourceEvent_Id(99L)).thenReturn(false);
@@ -80,7 +107,8 @@ class AlertServiceTest {
         when(alertRepository.save(any(Alert.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         service.onMortalityRecorded(new MortalityRecordedEvent(
-                99L, 10L, 21L, LocalDate.of(2026, 9, 13), 1, 0, "Unknown"));
+                99L, 10L, 21L, LocalDate.of(2026, 9, 13), EventType.HEALTH_DEATH,
+                1, 0, "Unknown"));
 
         ArgumentCaptor<Alert> captor = ArgumentCaptor.forClass(Alert.class);
         verify(alertRepository).save(captor.capture());

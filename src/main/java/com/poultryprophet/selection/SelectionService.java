@@ -76,7 +76,7 @@ public class SelectionService {
     @Transactional
     public SelectionRowResponse decide(Long batchId, Long birdId, Long farmId, Long managerId,
                                        SelectionDecisionRequest request) {
-        Bird bird = birdService.requireBird(birdId, batchId, farmId);
+        Bird bird = birdService.requireWritableBird(birdId, batchId, farmId);
         BirdScore score = birdScoreRepository.findByBirdId(birdId)
                 .orElseThrow(() -> new BadRequestException(
                         "Bird " + birdId + " has not been scored yet; open the selection view first"));

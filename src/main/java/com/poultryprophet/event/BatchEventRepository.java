@@ -22,6 +22,14 @@ public interface BatchEventRepository extends JpaRepository<BatchEvent, Long> {
 
     Optional<BatchEvent> findByOperationId(UUID operationId);
 
+    Optional<BatchEvent> findTopByBatchIdAndEventDateLessThanEqualOrderByIdDesc(Long batchId, LocalDate eventDate);
+
+    @Query("select e from BatchEvent e "
+            + "where e.eventType in :eventTypes "
+            + "and not exists (select a.id from Alert a where a.sourceEvent.id = e.id) "
+            + "order by e.createdAt asc")
+    List<BatchEvent> findDeathEventsMissingAlerts(@Param("eventTypes") List<EventType> eventTypes);
+
     boolean existsByBatchIdAndCreatedAtAfter(Long batchId, Instant cutoff);
 
     @Query("select coalesce(sum(e.affectedCount), 0) from BatchEvent e "
