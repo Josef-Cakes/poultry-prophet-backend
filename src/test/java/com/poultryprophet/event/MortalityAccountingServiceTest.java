@@ -6,11 +6,14 @@ import com.poultryprophet.batch.BatchService;
 import com.poultryprophet.common.BadRequestException;
 import com.poultryprophet.common.DateValidationService;
 import com.poultryprophet.event.dto.CreateBatchEventRequest;
+import com.poultryprophet.population.PopulationProjectionService;
 import com.poultryprophet.record.DailyRecordRepository;
+import com.poultryprophet.sexcomposition.SexCompositionProjectionService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
@@ -48,6 +51,12 @@ class MortalityAccountingServiceTest {
     @Mock
     private DateValidationService dateValidation;
 
+    @Spy
+    private PopulationProjectionService populationProjectionService = new PopulationProjectionService();
+
+    @Mock
+    private SexCompositionProjectionService sexCompositionProjectionService;
+
     @InjectMocks
     private MortalityAccountingService service;
 
@@ -55,6 +64,7 @@ class MortalityAccountingServiceTest {
     void deductsPopulationAndReturnsRemainingPopulationWithoutDailyRecord() {
         LocalDate date = LocalDate.now(ZoneId.of("Asia/Manila")).minusDays(1);
         when(dateValidation.resolve(date)).thenReturn(date);
+        when(dateValidation.today()).thenReturn(LocalDate.now(ZoneId.of("Asia/Manila")));
         Batch batch = batch(55);
         when(batchService.requireBatchForUpdate(10L, 7L)).thenReturn(batch);
         when(eventRepository.save(any(BatchEvent.class))).thenAnswer(invocation -> {
@@ -157,6 +167,52 @@ class MortalityAccountingServiceTest {
         assertThat(retry.event().getId()).isEqualTo(101L);
         assertThat(retry.remainingPopulation()).isEqualTo(54);
         verify(eventRepository).save(any(BatchEvent.class));
+    }
+
+    @Test
+    void persistsSignedSexDeltasWithThePopulationEvent() {
+        LocalDate date = LocalDate.now(ZoneId.of("Asia/Manila")).minusDays(1);
+        UUID operationId = UUID.randomUUID();
+        when(dateValidation.resolve(date)).thenReturn(date);
+        when(dateValidation.today()).thenReturn(LocalDate.now(ZoneId.of("Asia/Manila")));
+        Batch batch = batch(55);
+        when(batchService.requireBatchForUpdate(10L, 7L)).thenReturn(batch);
+        when(sexCompositionProjectionService.hasBaseline(10L, 7L, date)).thenReturn(true);
+        when(eventRepository.findByOperationId(operationId)).thenReturn(Optional.empty());
+        when(eventRepository.save(any(BatchEvent.class))).thenAnswer(invocation -> {
+            BatchEvent event = invocation.getArgument(0);
+            event.setId(102L);
+            return event;
+        });
+
+        MortalityAccountingService.MortalityAccountingResult result = service.record(
+                10L, 7L, 21L,
+                new CreateBatchEventRequest(date, EventType.CULLING, "Culling", null, 1,
+                        null, null, operationId, null,
+                        new CreateBatchEventRequest.SexAllocation(-1, 0, 0)));
+
+        assertThat(result.event().getMaleDelta()).isEqualTo(-1);
+        assertThat(result.event().getFemaleDelta()).isEqualTo(0);
+        assertThat(result.event().getUnclassifiedDelta()).isEqualTo(0);
+        verify(sexCompositionProjectionService).validateCandidate(any(), any(), any(), any());
+    }
+
+    @Test
+    void rejectsSexAllocationThatDoesNotMatchPopulationDelta() {
+        LocalDate date = LocalDate.now(ZoneId.of("Asia/Manila")).minusDays(1);
+        when(dateValidation.resolve(date)).thenReturn(date);
+        Batch batch = batch(55);
+        when(batchService.requireBatchForUpdate(10L, 7L)).thenReturn(batch);
+        when(sexCompositionProjectionService.hasBaseline(10L, 7L, date)).thenReturn(true);
+
+        assertThatThrownBy(() -> service.record(
+                10L, 7L, 21L,
+                new CreateBatchEventRequest(date, EventType.CULLING, "Culling", null, 2,
+                        null, null, UUID.randomUUID(), null,
+                        new CreateBatchEventRequest.SexAllocation(-1, 0, 0))))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessage("Male + female + unclassified changes must equal the population change");
+        verify(eventRepository, never()).save(any(BatchEvent.class));
     }
 
     private static Batch batch(int currentPopulation) {

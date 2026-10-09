@@ -51,7 +51,7 @@ public class ReportService {
         if (periodStart.isAfter(periodEnd)) {
             throw new BadRequestException("periodStart must not be after periodEnd");
         }
-        Batch batch = batchService.requireBatch(batchId, farmId);
+        Batch batch = batchService.requireWritableBatch(batchId, farmId);
 
         Instant startInstant = periodStart.atStartOfDay().toInstant(ZoneOffset.UTC);
         Instant endInstant = periodEnd.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);

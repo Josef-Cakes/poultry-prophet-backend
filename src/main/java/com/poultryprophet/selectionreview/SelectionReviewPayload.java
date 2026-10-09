@@ -26,6 +26,7 @@ public record SelectionReviewPayload(
         FinanceSummary finance,
         List<DataAvailabilityItem> dataAvailability,
         SelectionSummary selectionSummary,
+        SexCompositionSummary sexComposition,
         ReviewInstructions reviewInstructions
 ) {
     public record BatchOverview(
@@ -50,6 +51,7 @@ public record SelectionReviewPayload(
             String reconciliationMessage,
             long healthRelatedDeaths,
             Double healthRelatedLossPercentage,
+            long totalDeaths,
             long accidentalDeaths,
             long predation,
             long missing,
@@ -82,8 +84,11 @@ public record SelectionReviewPayload(
             String productType,
             String brandName,
             String productName,
-            Double quantity,
+            BigDecimal quantity,
             String unit,
+            BigDecimal unitCost,
+            BigDecimal calculatedCost,
+            String costStatus,
             String purpose,
             String notes,
             Long recordedBy
@@ -110,6 +115,9 @@ public record SelectionReviewPayload(
             BigDecimal recordedIncome,
             BigDecimal recordedExpense,
             BigDecimal recordedNetCashFlow,
+            BigDecimal productsConsumedCost,
+            BigDecimal totalRecordedBatchCost,
+            BigDecimal recordedContribution,
             long postedTransactionCount,
             boolean recordsMayBeIncomplete,
             String limitation
@@ -136,6 +144,19 @@ public record SelectionReviewPayload(
             Set<String> criterionCodes,
             Long reviewerId,
             String criteriaNotes,
+            String notes
+    ) {}
+
+    /** Whole-batch sex count captured as of the report date. This is descriptive only. */
+    public record SexCompositionSummary(
+            Long recordId,
+            LocalDate observedOn,
+            int populationAsOfObservation,
+            int maleCount,
+            int femaleCount,
+            int unclassifiedCount,
+            Long recordedBy,
+            String revisionReason,
             String notes
     ) {}
 

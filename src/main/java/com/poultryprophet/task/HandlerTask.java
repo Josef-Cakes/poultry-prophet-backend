@@ -15,6 +15,11 @@ public class HandlerTask {
     @Column(nullable = false) private String title;
     @Column(columnDefinition = "text") private String instructions;
     private Long assignedHandlerId;
+    @Column(nullable = false, length = 24) private String assignmentScope = "HANDLER";
+    private Instant visibleFrom;
+    @Column(length = 48) private String sourceType;
+    private Long sourceId;
+    private Long completedBy;
     @Column(nullable = false) private Long assignedManagerId;
     private Instant dueAt;
     @Enumerated(EnumType.STRING) @Column(nullable = false) private TaskPriority priority = TaskPriority.NORMAL;
@@ -38,6 +43,16 @@ public class HandlerTask {
     public void setInstructions(String instructions) { this.instructions = instructions; }
     public Long getAssignedHandlerId() { return assignedHandlerId; }
     public void setAssignedHandlerId(Long assignedHandlerId) { this.assignedHandlerId = assignedHandlerId; }
+    public String getAssignmentScope() { return assignmentScope; }
+    public void setAssignmentScope(String value) { this.assignmentScope = value; }
+    public Instant getVisibleFrom() { return visibleFrom; }
+    public void setVisibleFrom(Instant value) { this.visibleFrom = value; }
+    public String getSourceType() { return sourceType; }
+    public void setSourceType(String value) { this.sourceType = value; }
+    public Long getSourceId() { return sourceId; }
+    public void setSourceId(Long value) { this.sourceId = value; }
+    public Long getCompletedBy() { return completedBy; }
+    public void setCompletedBy(Long value) { this.completedBy = value; }
     public Long getAssignedManagerId() { return assignedManagerId; }
     public void setAssignedManagerId(Long assignedManagerId) { this.assignedManagerId = assignedManagerId; }
     public Instant getDueAt() { return dueAt; }

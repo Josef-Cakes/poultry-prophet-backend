@@ -82,6 +82,17 @@ chmod +x mvnw                 # Linux/macOS; only needed once
 java -jar target/poultry-prophet-backend-0.1.0.jar
 ```
 
+For an existing validation database, apply the reviewed inventory-cost migration before
+starting the backend. The runner prints a preflight, requires a non-empty backup file and
+explicit approval, and verifies that the backfill removed null valuation states:
+
+```bash
+BACKUP_FILE=/path/to/reviewed-backup.dump \
+DATABASE_URL='postgresql://...' \
+INVENTORY_MIGRATION_APPROVED=YES \
+bash scripts/apply-inventory-cost-valuation.sh
+```
+
 Verify the running API in another terminal:
 
 ```bash

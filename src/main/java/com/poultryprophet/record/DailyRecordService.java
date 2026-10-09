@@ -83,7 +83,7 @@ public class DailyRecordService {
                               Double waterIntakeMl, String behaviorNotes,
                               ObservationQuality temperatureQuality, ObservationQuality feedQuality,
                               ObservationQuality waterQuality, Instant updatedAt, SyncStatus syncStatus) {
-        Batch batch = batchService.requireBatch(batchId, farmId);
+        Batch batch = batchService.requireWritableBatch(batchId, farmId);
         LocalDate selectedDate = dateValidation.resolve(date);
         dateValidation.validate(selectedDate, batch.getStartDate());
         DailyRecord record = recordRepository.findByBatchIdAndRecordDate(batch.getId(), selectedDate)
@@ -93,7 +93,7 @@ public class DailyRecordService {
         if (legacyDataProperties.isAllowMortalityReconciliation()) {
             derivedMortality = mortalityAccountingService.reconcileLegacyMortality(
                     batchId, farmId, handlerId, selectedDate, mortalityCount);
-            batch = batchService.requireBatch(batchId, farmId);
+            batch = batchService.requireWritableBatch(batchId, farmId);
         } else {
             if (mortalityCount != null && mortalityCount != canonicalHealthDeaths) {
                 throw new BadRequestException(

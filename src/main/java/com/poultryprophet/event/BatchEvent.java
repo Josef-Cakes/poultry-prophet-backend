@@ -55,6 +55,16 @@ public class BatchEvent {
     @Column(name = "population_after")
     private Integer populationAfter;
 
+    /** Signed sex-specific population effect. Null means this legacy event was not sex-attributed. */
+    @Column(name = "male_delta")
+    private Integer maleDelta;
+
+    @Column(name = "female_delta")
+    private Integer femaleDelta;
+
+    @Column(name = "unclassified_delta")
+    private Integer unclassifiedDelta;
+
     /** Short title — primary cause, medicine name, or behaviour category. */
     @Column(nullable = false)
     private String title;
@@ -99,6 +109,15 @@ public class BatchEvent {
 
     public Integer getPopulationAfter() { return populationAfter; }
     public void setPopulationAfter(Integer populationAfter) { this.populationAfter = populationAfter; }
+
+    public Integer getMaleDelta() { return maleDelta; }
+    public void setMaleDelta(Integer maleDelta) { this.maleDelta = maleDelta; }
+
+    public Integer getFemaleDelta() { return femaleDelta; }
+    public void setFemaleDelta(Integer femaleDelta) { this.femaleDelta = femaleDelta; }
+
+    public Integer getUnclassifiedDelta() { return unclassifiedDelta; }
+    public void setUnclassifiedDelta(Integer unclassifiedDelta) { this.unclassifiedDelta = unclassifiedDelta; }
 
     public String getTitle() { return title; }
     public void setTitle(String title) { this.title = title; }

@@ -52,6 +52,7 @@ public class BatchEventService {
         }
 
         Batch batch = batchService.requireBatchForUpdate(batchId, farmId);
+        batchService.ensureWritable(batch);
         LocalDate date = dateValidation.resolve(req.eventDate());
         BatchEvent existing = req.operationId() == null
                 ? null

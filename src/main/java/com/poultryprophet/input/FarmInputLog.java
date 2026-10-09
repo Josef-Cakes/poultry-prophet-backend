@@ -11,6 +11,7 @@ import jakarta.persistence.Table;
 import com.poultryprophet.inventory.InventoryStatus;
 
 import java.time.Instant;
+import java.math.BigDecimal;
 import java.util.UUID;
 
 @Entity
@@ -43,8 +44,8 @@ public class FarmInputLog {
     @Column(name = "product_name")
     private String productName;
 
-    @Column
-    private Double quantity;
+    @Column(precision = 14, scale = 3)
+    private BigDecimal quantity;
 
     @Column
     private String unit;
@@ -70,6 +71,15 @@ public class FarmInputLog {
 
     @Column(name = "inventory_movement_id")
     private Long inventoryMovementId;
+
+    @Column(name = "unit_cost_snapshot", precision = 16, scale = 6)
+    private BigDecimal unitCostSnapshot;
+
+    @Column(name = "calculated_cost", precision = 16, scale = 2)
+    private BigDecimal calculatedCost;
+
+    @Column(name = "cost_status", length = 16)
+    private String costStatus;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "inventory_status", length = 32)
@@ -97,8 +107,8 @@ public class FarmInputLog {
     public void setBrandName(String brandName) { this.brandName = brandName; }
     public String getProductName() { return productName; }
     public void setProductName(String productName) { this.productName = productName; }
-    public Double getQuantity() { return quantity; }
-    public void setQuantity(Double quantity) { this.quantity = quantity; }
+    public BigDecimal getQuantity() { return quantity; }
+    public void setQuantity(BigDecimal quantity) { this.quantity = quantity; }
     public String getUnit() { return unit; }
     public void setUnit(String unit) { this.unit = unit; }
     public String getRoute() { return route; }
@@ -115,6 +125,12 @@ public class FarmInputLog {
     public void setFarmProductId(Long farmProductId) { this.farmProductId = farmProductId; }
     public Long getInventoryMovementId() { return inventoryMovementId; }
     public void setInventoryMovementId(Long inventoryMovementId) { this.inventoryMovementId = inventoryMovementId; }
+    public BigDecimal getUnitCostSnapshot() { return unitCostSnapshot; }
+    public void setUnitCostSnapshot(BigDecimal unitCostSnapshot) { this.unitCostSnapshot = unitCostSnapshot; }
+    public BigDecimal getCalculatedCost() { return calculatedCost; }
+    public void setCalculatedCost(BigDecimal calculatedCost) { this.calculatedCost = calculatedCost; }
+    public String getCostStatus() { return costStatus; }
+    public void setCostStatus(String costStatus) { this.costStatus = costStatus; }
     public InventoryStatus getInventoryStatus() { return inventoryStatus; }
     public void setInventoryStatus(InventoryStatus inventoryStatus) { this.inventoryStatus = inventoryStatus; }
     public Integer getAffectedBirdCount() { return affectedBirdCount; }

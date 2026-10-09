@@ -36,7 +36,7 @@ public class RangingRecordService {
     @Transactional
     public RangingRecordResponse record(Long batchId, Long birdId, Long farmId,
                                         CreateRangingRecordRequest req, Long handlerId) {
-        Bird bird = birdService.requireBird(birdId, batchId, farmId);
+        Bird bird = birdService.requireWritableBird(birdId, batchId, farmId);
         LocalDate date = req.recordDate() != null ? req.recordDate() : LocalDate.now();
 
         RangingRecord record = recordRepository.findByBirdIdAndRecordDate(birdId, date)

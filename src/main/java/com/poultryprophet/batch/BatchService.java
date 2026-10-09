@@ -3,12 +3,20 @@ package com.poultryprophet.batch;
 import com.poultryprophet.batch.dto.BatchResponse;
 import com.poultryprophet.batch.dto.BatchTrackingResponse;
 import com.poultryprophet.batch.dto.CreateBatchRequest;
+import com.poultryprophet.batch.dto.ConfirmHatchDateRequest;
 import com.poultryprophet.batch.dto.StageTrackerItem;
 import com.poultryprophet.common.BadRequestException;
+import com.poultryprophet.common.ConflictException;
 import com.poultryprophet.common.NotFoundException;
+import com.poultryprophet.event.BatchEvent;
+import com.poultryprophet.event.BatchEventRepository;
+import com.poultryprophet.population.PopulationProjection;
+import com.poultryprophet.population.PopulationProjectionService;
 import com.poultryprophet.user.Role;
 import com.poultryprophet.user.User;
 import com.poultryprophet.user.UserRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -29,15 +37,34 @@ public class BatchService {
     private final LifecycleStageRepository stageRepository;
     private final BatchHandlerAssignmentRepository assignmentRepository;
     private final UserRepository userRepository;
+    private final BatchEventRepository eventRepository;
+    private final PopulationProjectionService populationProjectionService;
+    private final java.time.ZoneId farmZone;
 
+    @Autowired
     public BatchService(BatchRepository batchRepository,
                         LifecycleStageRepository stageRepository,
                         BatchHandlerAssignmentRepository assignmentRepository,
-                        UserRepository userRepository) {
+                        UserRepository userRepository,
+                        BatchEventRepository eventRepository,
+                        PopulationProjectionService populationProjectionService,
+                        @Value("${app.time-zone:Asia/Manila}") String timeZone) {
         this.batchRepository = batchRepository;
         this.stageRepository = stageRepository;
         this.assignmentRepository = assignmentRepository;
         this.userRepository = userRepository;
+        this.eventRepository = eventRepository;
+        this.populationProjectionService = populationProjectionService;
+        this.farmZone = java.time.ZoneId.of(timeZone == null ? "Asia/Manila" : timeZone);
+    }
+
+    /** Compatibility constructor for focused unit tests that do not load population events. */
+    public BatchService(BatchRepository batchRepository,
+                        LifecycleStageRepository stageRepository,
+                        BatchHandlerAssignmentRepository assignmentRepository,
+                        UserRepository userRepository) {
+        this(batchRepository, stageRepository, assignmentRepository, userRepository, null,
+                new PopulationProjectionService(), "Asia/Manila");
     }
 
     @Transactional
@@ -60,6 +87,7 @@ public class BatchService {
         // Stage is auto-derived from age (the start/hatch date drives it); a manager can pin a
         // manual override later. This also handles registering older birds via a past start date.
         batch.setStage(autoStageFor(request.startDate()));
+        batch.setHatchDateConfirmedAt(java.time.Instant.now());
         batch.setStageManual(false);
         batch.setStatus(BatchStatus.ACTIVE);
         batchRepository.save(batch);
@@ -77,8 +105,7 @@ public class BatchService {
             assignmentRepository.save(new BatchHandlerAssignment(batch, handler));
         }
 
-        StageView stageView = resolveStage(batch);
-        return BatchResponse.from(batch, new ArrayList<>(handlerIds), stageView.stage(), stageView.auto());
+        return responseFor(batch);
     }
 
     @Transactional(readOnly = true)
@@ -95,37 +122,24 @@ public class BatchService {
 
     @Transactional(readOnly = true)
     public BatchResponse getForFarm(Long batchId, Long farmId) {
-        return toResponse(requireBatch(batchId, farmId));
+        return responseFor(requireBatch(batchId, farmId));
     }
 
-    /** Retires a batch — hides it from the working dashboard list. Reversible via restore. */
     @Transactional
-    public BatchResponse archive(Long batchId, Long farmId) {
-        Batch batch = requireBatch(batchId, farmId);
-        if (batch.getStatus() == BatchStatus.ARCHIVED) {
-            throw new BadRequestException("Batch " + batchId + " is already archived");
-        }
-        batch.setStatus(BatchStatus.ARCHIVED);
-        batchRepository.save(batch);
-        return toResponse(batch);
-    }
-
-    /** Brings an archived batch back to the working list. */
-    @Transactional
-    public BatchResponse restore(Long batchId, Long farmId) {
-        Batch batch = requireBatch(batchId, farmId);
-        if (batch.getStatus() != BatchStatus.ARCHIVED) {
-            throw new BadRequestException("Batch " + batchId + " is not archived");
-        }
-        batch.setStatus(BatchStatus.ACTIVE);
-        batchRepository.save(batch);
-        return toResponse(batch);
+    public BatchResponse confirmHatchDate(Long batchId, Long farmId, Long userId, ConfirmHatchDateRequest request) {
+        Batch batch = requireWritableBatch(batchId, farmId);
+        if (request.hatchDate().isAfter(LocalDate.now(farmZone))) throw new BadRequestException("Hatch date cannot be in the future");
+        batch.setStartDate(request.hatchDate());
+        batch.setHatchDateConfirmedAt(java.time.Instant.now());
+        batch.setHatchDateConfirmedByUserId(userId);
+        batch.setStage(autoStageFor(request.hatchDate()));
+        return responseFor(batchRepository.save(batch));
     }
 
     @Transactional(readOnly = true)
     public BatchTrackingResponse getTracking(Long batchId, Long farmId) {
         Batch batch = requireBatch(batchId, farmId);
-        long daysElapsed = Math.max(1, ChronoUnit.DAYS.between(batch.getStartDate(), LocalDate.now()));
+        long daysElapsed = BatchAgePolicy.ageDays(batch.getStartDate(), LocalDate.now(farmZone));
         DevelopmentStage current = DevelopmentStage.fromDaysElapsed(daysElapsed);
 
         List<DevelopmentStage> tracked = Arrays.asList(
@@ -152,6 +166,21 @@ public class BatchService {
                 .orElseThrow(() -> new NotFoundException("Batch " + batchId + " not found"));
     }
 
+    /** Farm-scoped accessor for any endpoint that creates or changes a batch record. */
+    @Transactional(readOnly = true)
+    public Batch requireWritableBatch(Long batchId, Long farmId) {
+        Batch batch = requireBatch(batchId, farmId);
+        ensureWritable(batch);
+        return batch;
+    }
+
+    /** Applies the same guard when a caller already loaded the batch for a read/write workflow. */
+    public void ensureWritable(Batch batch) {
+        if (batch != null && batch.getStatus() == BatchStatus.ARCHIVED) {
+            throw new ConflictException("BATCH_ARCHIVED: this batch is archived. Restore it before adding records.");
+        }
+    }
+
     /** The effective stage to display. Lifecycle stage is always derived from batch age. */
     public record StageView(LifecycleStage stage, boolean auto) {
     }
@@ -170,19 +199,44 @@ public class BatchService {
 
     /** Resolves the lifecycle stage as it was on a historical report date. */
     public StageView resolveStage(Batch batch, LocalDate asOfDate) {
-        LocalDate effectiveDate = asOfDate == null ? LocalDate.now() : asOfDate;
-        long days = Math.max(1, ChronoUnit.DAYS.between(batch.getStartDate(), effectiveDate) + 1);
+        LocalDate effectiveDate = asOfDate == null ? LocalDate.now(farmZone) : asOfDate;
+        long days = BatchAgePolicy.ageDays(batch.getStartDate(), effectiveDate);
         LifecycleStage auto = stageRepository.findByNameIgnoreCase(autoStageName(days))
                 .orElse(batch.getStage());
         return new StageView(auto, true);
     }
 
     private BatchResponse toResponse(Batch batch) {
+        return responseFor(batch);
+    }
+
+    /** Builds a farm-scoped batch response with a reconciled, non-negative display count. */
+    public BatchResponse responseFor(Batch batch) {
         StageView stageView = resolveStage(batch);
+        PopulationDisplay population = populationDisplay(batch);
         return BatchResponse.from(batch,
                 assignmentRepository.findHandlerUserIdsByBatchId(batch.getId()),
-                stageView.stage(), stageView.auto());
+                stageView.stage(), stageView.auto(), population.displayPopulation(),
+                population.status(), population.warning());
     }
+
+    private PopulationDisplay populationDisplay(Batch batch) {
+        if (eventRepository == null) {
+            return new PopulationDisplay(Math.max(0, Math.min(batch.getInitialPopulation(), batch.getCurrentPopulation())),
+                    batch.getCurrentPopulation() < 0 || batch.getCurrentPopulation() > batch.getInitialPopulation()
+                            ? PopulationProjection.RECONCILIATION_REQUIRED : PopulationProjection.VALID,
+                    batch.getCurrentPopulation() < 0 || batch.getCurrentPopulation() > batch.getInitialPopulation()
+                            ? "The stored current count needs review." : null);
+        }
+        LocalDate today = LocalDate.now(farmZone);
+        List<BatchEvent> events = eventRepository.findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(
+                batch.getId(), batch.getStartDate(), today);
+        PopulationProjection projection = populationProjectionService.project(batch, events, today, farmZone);
+        int display = projection.validPopulation() == null ? projection.boundedPopulation() : projection.validPopulation();
+        return new PopulationDisplay(display, projection.status(), projection.reconciliationMessage());
+    }
+
+    private record PopulationDisplay(int displayPopulation, String status, String warning) {}
 
     /** The lifecycle stage a batch starting on the given date should be in today, by age. */
     private LifecycleStage autoStageFor(LocalDate startDate) {
@@ -191,25 +245,34 @@ public class BatchService {
                 .orElseThrow(() -> new BadRequestException("Lifecycle stage '" + name + "' is not configured"));
     }
 
-    private static long daysElapsed(LocalDate startDate) {
-        return Math.max(1, ChronoUnit.DAYS.between(startDate, LocalDate.now()));
+    private long daysElapsed(LocalDate startDate) {
+        return BatchAgePolicy.ageDays(startDate, LocalDate.now(farmZone));
     }
 
     /**
-     * Age band -> lifecycle stage name. Brooding day 1-30 (≈ first month, heat-dependent chick
-     * stage), ranging 31-120 (grow-out), pre-conditioning 121+ (month-5 selection onward).
+     * Age band -> lifecycle stage name. Hatch day is day 0; brooding is days 0-30,
+     * ranging is days 31-120, and pre-conditioning begins at day 121.
      * Provisional bands per the SDD preface — adjustable here without touching callers.
      */
     private static String autoStageName(long days) {
-        if (days <= 30) return "brooding";
-        if (days <= 120) return "ranging";
-        return "pre-conditioning";
+        return BatchAgePolicy.stageName(days);
     }
 
     /** Loads a farm-scoped batch while holding a database row lock for accounting writes. */
     @Transactional
     public Batch requireBatchForUpdate(Long batchId, Long farmId) {
-        return batchRepository.findByIdAndFarmIdForUpdate(batchId, farmId)
+        Batch batch = batchRepository.findByIdAndFarmIdForUpdate(batchId, farmId)
                 .orElseThrow(() -> new NotFoundException("Batch " + batchId + " not found"));
+        return batch;
+    }
+
+    /** Row lock plus the archive write guard for event/accounting mutations. */
+    @Transactional
+    public Batch requireWritableBatchForUpdate(Long batchId, Long farmId) {
+        Batch batch = requireBatchForUpdate(batchId, farmId);
+        if (batch.getStatus() == BatchStatus.ARCHIVED) {
+            throw new ConflictException("BATCH_ARCHIVED: this batch is archived. Restore it before adding records.");
+        }
+        return batch;
     }
 }

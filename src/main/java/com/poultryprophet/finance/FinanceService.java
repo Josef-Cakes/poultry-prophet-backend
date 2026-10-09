@@ -6,6 +6,9 @@ import com.poultryprophet.common.BadRequestException;
 import com.poultryprophet.common.NotFoundException;
 import com.poultryprophet.finance.dto.*;
 import com.poultryprophet.incubation.IncubationService;
+import com.poultryprophet.inventory.InventoryMovement;
+import com.poultryprophet.inventory.InventoryMovementRepository;
+import com.poultryprophet.inventory.InventoryMovementType;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -24,10 +27,12 @@ public class FinanceService {
     private final FinancialTransactionRepository repository;
     private final BatchService batchService;
     private final IncubationService incubationService;
+    private final InventoryMovementRepository inventoryMovementRepository;
 
     public FinanceService(FinancialTransactionRepository repository, BatchService batchService,
-                          IncubationService incubationService) {
+                          IncubationService incubationService, InventoryMovementRepository inventoryMovementRepository) {
         this.repository = repository; this.batchService = batchService; this.incubationService = incubationService;
+        this.inventoryMovementRepository = inventoryMovementRepository;
     }
 
     @Transactional
@@ -39,6 +44,8 @@ public class FinanceService {
         tx.setTransactionDate(req.transactionDate()); tx.setType(req.type()); tx.setCategory(req.category().trim());
         tx.setAmount(req.amount()); tx.setCurrency(req.currency() == null || req.currency().isBlank() ? "PHP" : req.currency().trim().toUpperCase());
         tx.setCounterparty(trim(req.counterparty())); tx.setDescription(trim(req.description())); tx.setEnteredBy(userId);
+        tx.setSourceType(req.sourceType() == null || req.sourceType().isBlank() ? "MANUAL" : req.sourceType().trim().toUpperCase());
+        tx.setSourceOperationId(req.sourceOperationId() == null ? null : req.sourceOperationId().toString());
         return FinancialTransactionResponse.from(repository.save(tx));
     }
 
@@ -54,6 +61,7 @@ public class FinanceService {
     public FinancialTransactionResponse voidTransaction(Long id, Long farmId, String reason) {
         FinancialTransaction tx = repository.findByIdAndFarmId(id, farmId)
                 .orElseThrow(() -> new NotFoundException("Financial transaction " + id + " not found"));
+        if (tx.getBatchId() != null) batchService.requireWritableBatch(tx.getBatchId(), farmId);
         if (tx.getStatus() == FinanceTransactionStatus.VOIDED) throw new BadRequestException("Transaction is already voided");
         tx.setStatus(FinanceTransactionStatus.VOIDED); tx.setVoidReason(trim(reason));
         return FinancialTransactionResponse.from(repository.save(tx));
@@ -117,6 +125,7 @@ public class FinanceService {
                 income = income.add(tx.getAmount());
                 incomeByBucket.merge(bucket, tx.getAmount(), BigDecimal::add);
             } else {
+                if (batchId != null && "INVENTORY_PURCHASE".equalsIgnoreCase(tx.getSourceType())) continue;
                 expense = expense.add(tx.getAmount());
                 expenseByBucket.merge(bucket, tx.getAmount(), BigDecimal::add);
                 expenseByCategory.merge(tx.getCategory(), tx.getAmount(), BigDecimal::add);
@@ -153,8 +162,22 @@ public class FinanceService {
         String limitation = batchId == null
                 ? "Farm view includes batch-linked and farm-wide records."
                 : "Batch view includes only transactions linked to this batch; farm-wide costs are excluded.";
+        BigDecimal productsConsumed = BigDecimal.ZERO;
+        boolean productCostComplete = true;
+        if (batchId != null && inventoryMovementRepository != null) {
+            List<InventoryMovement> movements = inventoryMovementRepository.findByFarmIdAndBatchIdAndOccurredAtBetweenOrderByOccurredAtAsc(
+                    farmId, batchId, effectiveStart.atStartOfDay(java.time.ZoneId.of("Asia/Manila")).toInstant(),
+                    effectiveEnd.plusDays(1).atStartOfDay(java.time.ZoneId.of("Asia/Manila")).toInstant());
+            for (InventoryMovement movement : movements) {
+                if (movement.getMovementType() != InventoryMovementType.USAGE) continue;
+                if (movement.getInventoryValueDelta() == null) productCostComplete = false;
+                else productsConsumed = productsConsumed.add(movement.getInventoryValueDelta().abs());
+            }
+        }
+        BigDecimal totalRecordedBatchCost = expense.add(productsConsumed);
         return new FinanceAnalyticsResponse(scope, batchId, batchName, effectiveStart, effectiveEnd, currency,
-                new FinanceAnalyticsResponse.Totals(income, expense, income.subtract(expense), postedCount, voidedCount),
+                new FinanceAnalyticsResponse.Totals(income, expense, income.subtract(expense), productsConsumed,
+                        totalRecordedBatchCost, income.subtract(totalRecordedBatchCost), productCostComplete, postedCount, voidedCount),
                 series, categoryTotals, new FinanceAnalyticsResponse.Limitations(batchId != null, limitation));
     }
 
@@ -173,7 +196,7 @@ public class FinanceService {
         return end.isAfter(maximum) ? maximum : end;
     }
     private void validateParent(Long farmId, Long batchId, Long cycleId) {
-        if (batchId != null) batchService.requireBatch(batchId, farmId);
+        if (batchId != null) batchService.requireWritableBatch(batchId, farmId);
         if (cycleId != null) incubationService.require(cycleId, farmId);
     }
     private String trim(String value) { return value == null || value.isBlank() ? null : value.trim(); }

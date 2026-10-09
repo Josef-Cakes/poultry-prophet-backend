@@ -25,7 +25,10 @@ public record BatchEventResponse(
         Integer populationDelta,
         Integer populationAfter,
         Integer remainingPopulation,
-        SalePurpose salePurpose
+        SalePurpose salePurpose,
+        Integer maleDelta,
+        Integer femaleDelta,
+        Integer unclassifiedDelta
 ) {
     public static BatchEventResponse from(BatchEvent e, String handlerName) {
         return from(e, handlerName, null);
@@ -37,6 +40,7 @@ public record BatchEventResponse(
                 e.getEventDate(), e.getEventType(), e.getSeverityLabel(),
                 e.getAffectedCount(), e.getTitle(), e.getDetails(),
                 e.getTags(), e.getCreatedAt(), e.getOperationId(), e.getPopulationDelta(),
-                e.getPopulationAfter(), remainingPopulation, e.getSalePurpose());
+                e.getPopulationAfter(), remainingPopulation, e.getSalePurpose(),
+                e.getMaleDelta(), e.getFemaleDelta(), e.getUnclassifiedDelta());
     }
 }

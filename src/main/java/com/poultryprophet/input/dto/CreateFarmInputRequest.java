@@ -6,6 +6,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 
 import java.time.Instant;
+import java.math.BigDecimal;
 import java.util.UUID;
 
 public record CreateFarmInputRequest(
@@ -15,7 +16,7 @@ public record CreateFarmInputRequest(
         @NotNull InputProductType productType,
         @NotBlank String brandName,
         String productName,
-        @DecimalMin(value = "0.0", inclusive = false) Double quantity,
+        @DecimalMin(value = "0.0", inclusive = false) BigDecimal quantity,
         String unit,
         String route,
         String purpose,
@@ -31,7 +32,7 @@ public record CreateFarmInputRequest(
                                   InputProductType productType,
                                   String brandName,
                                   String productName,
-                                  Double quantity,
+                                  BigDecimal quantity,
                                   String unit,
                                   String route,
                                   String purpose,

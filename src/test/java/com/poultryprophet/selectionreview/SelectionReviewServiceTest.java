@@ -12,6 +12,9 @@ import com.poultryprophet.event.EventType;
 import com.poultryprophet.finance.FinancialTransactionRepository;
 import com.poultryprophet.incubation.IncubationCycleRepository;
 import com.poultryprophet.input.FarmInputLogRepository;
+import com.poultryprophet.population.PopulationProjectionService;
+import com.poultryprophet.sexcomposition.BatchSexComposition;
+import com.poultryprophet.sexcomposition.BatchSexCompositionRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -34,6 +37,7 @@ class SelectionReviewServiceTest {
     @Mock private IncubationCycleRepository incubationRepository;
     @Mock private FinancialTransactionRepository financeRepository;
     @Mock private BatchService batchService;
+    @Mock private BatchSexCompositionRepository sexCompositionRepository;
 
     @Test
     void keepsPopulationCausesSeparateAndDoesNotExposeFinanceToHandler() {
@@ -67,6 +71,7 @@ class SelectionReviewServiceTest {
                 LocalDate.of(2026, 9, 20), false);
 
         assertThat(payload.population().healthRelatedDeaths()).isEqualTo(2);
+        assertThat(payload.population().totalDeaths()).isEqualTo(2);
         assertThat(payload.population().predation()).isEqualTo(3);
         assertThat(payload.population().missing()).isEqualTo(1);
         assertThat(payload.population().returned()).isEqualTo(1);
@@ -77,6 +82,90 @@ class SelectionReviewServiceTest {
         assertThat(payload.finance()).isNull();
         assertThat(payload.dataAvailability()).anyMatch(value -> value.section().equals("Population events")
                 && value.recordCount() == 5);
+    }
+
+    @Test
+    void reportsTotalDeathsAcrossHealthAndAccidentalCauses() {
+        Batch batch = new Batch();
+        batch.setId(10L);
+        batch.setFarmId(3L);
+        batch.setName("Death breakdown batch");
+        batch.setInitialPopulation(500);
+        batch.setCurrentPopulation(175);
+        batch.setStartDate(LocalDate.of(2026, 10, 1));
+        LifecycleStage stage = new LifecycleStage("brooding", 0);
+
+        when(batchService.requireBatch(10L, 3L)).thenReturn(batch);
+        when(batchService.resolveStage(batch)).thenReturn(new BatchService.StageView(stage, true));
+        when(eventRepository.findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(
+                10L, batch.getStartDate(), LocalDate.of(2026, 10, 9)))
+                .thenReturn(List.of(event(EventType.HEALTH_DEATH, 100, -100),
+                        event(EventType.HEALTH_DEATH, 100, -100),
+                        event(EventType.HEALTH_DEATH, 120, -120),
+                        event(EventType.ACCIDENTAL_DEATH, 5, -5)));
+        when(inputRepository.findByFarmIdAndBatchIdOrderByRecordedAtDesc(3L, 10L)).thenReturn(List.of());
+        when(incubationRepository.findByFarmIdAndCreatedBatchId(3L, 10L)).thenReturn(List.of());
+
+        ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
+        SelectionReviewService service = new SelectionReviewService(reviewRepository, eventRepository,
+                inputRepository, incubationRepository, financeRepository, batchService, objectMapper);
+
+        SelectionReviewPayload payload = service.preview(10L, 3L,
+                batch.getStartDate(), LocalDate.of(2026, 10, 9), LocalDate.of(2026, 10, 9), false);
+
+        assertThat(payload.population().healthRelatedDeaths()).isEqualTo(320);
+        assertThat(payload.population().accidentalDeaths()).isEqualTo(5);
+        assertThat(payload.population().totalDeaths()).isEqualTo(325);
+        assertThat(payload.population().currentPopulation()).isEqualTo(175);
+    }
+
+    @Test
+    void includesLatestSexCompositionAtOrBeforeReportDate() {
+        Batch batch = new Batch();
+        batch.setId(11L);
+        batch.setFarmId(3L);
+        batch.setName("Sexed batch");
+        batch.setInitialPopulation(100);
+        batch.setCurrentPopulation(100);
+        batch.setStartDate(LocalDate.of(2026, 10, 1));
+        LifecycleStage stage = new LifecycleStage("brooding", 0);
+
+        when(batchService.requireBatch(11L, 3L)).thenReturn(batch);
+        when(batchService.resolveStage(batch)).thenReturn(new BatchService.StageView(stage, true));
+        when(eventRepository.findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(
+                11L, batch.getStartDate(), LocalDate.of(2026, 10, 9))).thenReturn(List.of());
+        when(inputRepository.findByFarmIdAndBatchIdOrderByRecordedAtDesc(3L, 11L)).thenReturn(List.of());
+        when(incubationRepository.findByFarmIdAndCreatedBatchId(3L, 11L)).thenReturn(List.of());
+
+        BatchSexComposition sex = new BatchSexComposition();
+        sex.setId(21L);
+        sex.setBatchId(11L);
+        sex.setFarmId(3L);
+        sex.setObservedOn(LocalDate.of(2026, 10, 8));
+        sex.setPopulationAsOfObservation(100);
+        sex.setMaleCount(55);
+        sex.setFemaleCount(40);
+        sex.setUnclassifiedCount(5);
+        sex.setRecordedBy(99L);
+        when(sexCompositionRepository
+                .findFirstByBatchIdAndFarmIdAndObservedOnLessThanEqualOrderByObservedOnDescCreatedAtDesc(
+                        11L, 3L, LocalDate.of(2026, 10, 9)))
+                .thenReturn(Optional.of(sex));
+
+        ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
+        SelectionReviewService service = new SelectionReviewService(reviewRepository, eventRepository,
+                inputRepository, incubationRepository, financeRepository, batchService, objectMapper,
+                null, new PopulationProjectionService(), sexCompositionRepository);
+
+        SelectionReviewPayload payload = service.preview(11L, 3L,
+                batch.getStartDate(), LocalDate.of(2026, 10, 9), LocalDate.of(2026, 10, 9), false);
+
+        assertThat(payload.sexComposition()).isNotNull();
+        assertThat(payload.sexComposition().maleCount()).isEqualTo(55);
+        assertThat(payload.sexComposition().femaleCount()).isEqualTo(40);
+        assertThat(payload.sexComposition().unclassifiedCount()).isEqualTo(5);
+        assertThat(payload.dataAvailability()).anyMatch(value -> value.section().equals("Sex composition")
+                && value.status().equals("AVAILABLE"));
     }
 
     @Test

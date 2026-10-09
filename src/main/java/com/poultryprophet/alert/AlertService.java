@@ -6,13 +6,19 @@ import com.poultryprophet.analytics.ThresholdConfig;
 import com.poultryprophet.analytics.ThresholdConfigRepository;
 import com.poultryprophet.batch.Batch;
 import com.poultryprophet.batch.BatchRepository;
+import com.poultryprophet.batch.BatchStatus;
 import com.poultryprophet.batch.BatchService;
 import com.poultryprophet.common.NotFoundException;
 import com.poultryprophet.common.QueryLimits;
+import com.poultryprophet.event.BatchEvent;
 import com.poultryprophet.event.BatchEventRepository;
+import com.poultryprophet.event.EventType;
 import com.poultryprophet.event.MortalityRecordedEvent;
 import com.poultryprophet.realtime.RealtimeNotificationService;
 import com.poultryprophet.user.UserRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -27,6 +33,8 @@ import java.util.List;
  */
 @Service
 public class AlertService {
+
+    private static final Logger log = LoggerFactory.getLogger(AlertService.class);
 
     private final AlertRepository alertRepository;
     private final SeverityClassifier severityClassifier;
@@ -113,6 +121,36 @@ public class AlertService {
     @EventListener
     @Transactional
     public void onMortalityRecorded(MortalityRecordedEvent event) {
+        createDeathAlert(event, true);
+    }
+
+    /** Repairs death events created before accidental deaths produced direct alerts. */
+    @EventListener(ApplicationReadyEvent.class)
+    @Transactional
+    public void backfillMissingDeathAlerts() {
+        int repaired = 0;
+        for (BatchEvent source : batchEventRepository.findDeathEventsMissingAlerts(
+                List.of(EventType.HEALTH_DEATH, EventType.ACCIDENTAL_DEATH))) {
+            if (alertRepository.existsBySourceEvent_Id(source.getId())) {
+                continue;
+            }
+            Batch batch = batchRepository.findById(source.getBatchId()).orElse(null);
+            if (batch == null || batch.getStatus() == BatchStatus.ARCHIVED) {
+                continue;
+            }
+            createDeathAlert(new MortalityRecordedEvent(
+                    source.getId(), source.getBatchId(), source.getHandlerId(), source.getEventDate(),
+                    source.getEventType(), source.getAffectedCount(),
+                    source.getPopulationAfter() == null ? batch.getCurrentPopulation() : source.getPopulationAfter(),
+                    source.getTitle()), false);
+            repaired++;
+        }
+        if (repaired > 0) {
+            log.info("Repaired {} missing death alert(s)", repaired);
+        }
+    }
+
+    private void createDeathAlert(MortalityRecordedEvent event, boolean publishRealtime) {
         if (alertRepository.existsBySourceEvent_Id(event.eventId())) {
             return;
         }
@@ -124,14 +162,16 @@ public class AlertService {
         String cause = event.cause() == null || event.cause().isBlank()
                 ? "Unknown" : event.cause();
         String deaths = event.affectedCount() == 1 ? "death" : "deaths";
+        String typeLabel = event.eventType() == EventType.ACCIDENTAL_DEATH
+                ? "accidental" : "health-related";
         String message = String.format("%s logged %d %s in %s on %s. Cause: %s.",
-                handlerName, event.affectedCount(), deaths, batchName,
+                handlerName, event.affectedCount(), typeLabel + " " + deaths, batchName,
                 event.eventDate(), cause);
 
         Alert alert = new Alert();
         alert.setBatch(batch);
         alert.setSourceEvent(batchEventRepository.getReferenceById(event.eventId()));
-        alert.setIndicatorType("HEALTH_DEATH");
+        alert.setIndicatorType(event.eventType().name());
         alert.setSeverity(event.remainingPopulation() == 0 ? Severity.CRITICAL : Severity.WARNING);
         alert.setMessage(message);
         alert.setBatchName(batchName);
@@ -140,7 +180,9 @@ public class AlertService {
         alert.setCause(cause);
         alert.setOccurrenceDate(event.eventDate());
         Alert saved = alertRepository.save(alert);
-        realtime.publishAlertCreated(saved);
+        if (publishRealtime) {
+            realtime.publishAlertCreated(saved);
+        }
     }
 
     @Transactional(readOnly = true)

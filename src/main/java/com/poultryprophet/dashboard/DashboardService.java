@@ -4,7 +4,6 @@ import com.poultryprophet.alert.Alert;
 import com.poultryprophet.alert.AlertRepository;
 import com.poultryprophet.alert.Severity;
 import com.poultryprophet.batch.Batch;
-import com.poultryprophet.batch.BatchHandlerAssignmentRepository;
 import com.poultryprophet.batch.BatchRepository;
 import com.poultryprophet.batch.BatchService;
 import com.poultryprophet.batch.BatchStatus;
@@ -26,18 +25,15 @@ public class DashboardService {
 
     private final BatchRepository batchRepository;
     private final BatchService batchService;
-    private final BatchHandlerAssignmentRepository assignmentRepository;
     private final AlertRepository alertRepository;
     private final SelectionReviewService selectionReviewService;
 
     public DashboardService(BatchRepository batchRepository,
                             BatchService batchService,
-                            BatchHandlerAssignmentRepository assignmentRepository,
                             AlertRepository alertRepository,
                             SelectionReviewService selectionReviewService) {
         this.batchRepository = batchRepository;
         this.batchService = batchService;
-        this.assignmentRepository = assignmentRepository;
         this.alertRepository = alertRepository;
         this.selectionReviewService = selectionReviewService;
     }
@@ -52,18 +48,11 @@ public class DashboardService {
     }
 
     private BatchDashboardResponse toResponse(Batch batch, Long farmId, LocalDate today) {
-        BatchService.StageView stageView = batchService.resolveStage(batch);
-        BatchResponse batchResponse = BatchResponse.from(
-                batch,
-                assignmentRepository.findHandlerUserIdsByBatchId(batch.getId()),
-                stageView.stage(),
-                stageView.auto());
-
         SelectionReviewPayload payload = selectionReviewService.preview(
                 batch.getId(), farmId, batch.getStartDate(), today, today, false);
         SelectionReviewPayload.PopulationSummary population = payload.population();
-        long otherChanges = population.accidentalDeaths()
-                + population.predation()
+        BatchResponse batchResponse = batchService.responseFor(batch);
+        long otherChanges = population.predation()
                 + population.missing()
                 + population.returned()
                 + population.transfersOut()
@@ -87,6 +76,8 @@ public class DashboardService {
 
         BatchDashboardSummary summary = new BatchDashboardSummary(
                 population.healthRelatedDeaths(),
+                population.accidentalDeaths(),
+                population.totalDeaths(),
                 otherChanges,
                 payload.healthEvents().size(),
                 activeAlerts.size(),

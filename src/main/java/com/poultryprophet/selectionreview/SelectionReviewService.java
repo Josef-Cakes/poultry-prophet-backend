@@ -21,8 +21,17 @@ import com.poultryprophet.incubation.IncubationCycle;
 import com.poultryprophet.incubation.IncubationCycleRepository;
 import com.poultryprophet.input.FarmInputLog;
 import com.poultryprophet.input.FarmInputLogRepository;
+import com.poultryprophet.inventory.InventoryMovement;
+import com.poultryprophet.inventory.InventoryMovementRepository;
+import com.poultryprophet.inventory.InventoryMovementType;
+import com.poultryprophet.population.PopulationProjection;
+import com.poultryprophet.population.PopulationProjectionService;
 import com.poultryprophet.selectionsession.SelectionSessionResponse;
 import com.poultryprophet.selectionsession.SelectionSessionService;
+import com.poultryprophet.sexcomposition.BatchSexComposition;
+import com.poultryprophet.sexcomposition.BatchSexCompositionRepository;
+import com.poultryprophet.sexcomposition.SexCompositionProjection;
+import com.poultryprophet.sexcomposition.SexCompositionProjectionService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -57,6 +66,10 @@ public class SelectionReviewService {
     private final BatchService batchService;
     private final ObjectMapper objectMapper;
     private final SelectionSessionService selectionSessionService;
+    private final PopulationProjectionService populationProjectionService;
+    private final BatchSexCompositionRepository sexCompositionRepository;
+    private final SexCompositionProjectionService sexCompositionProjectionService;
+    private final InventoryMovementRepository inventoryMovementRepository;
 
     @Value("${app.time-zone:Asia/Manila}")
     private String timeZone;
@@ -69,7 +82,11 @@ public class SelectionReviewService {
                                   FinancialTransactionRepository financeRepository,
                                   BatchService batchService,
                                   ObjectMapper objectMapper,
-                                  SelectionSessionService selectionSessionService) {
+                                  SelectionSessionService selectionSessionService,
+                                  PopulationProjectionService populationProjectionService,
+                                  BatchSexCompositionRepository sexCompositionRepository,
+                                  SexCompositionProjectionService sexCompositionProjectionService,
+                                  InventoryMovementRepository inventoryMovementRepository) {
         this.reviewRepository = reviewRepository;
         this.eventRepository = eventRepository;
         this.inputRepository = inputRepository;
@@ -78,6 +95,26 @@ public class SelectionReviewService {
         this.batchService = batchService;
         this.objectMapper = objectMapper;
         this.selectionSessionService = selectionSessionService;
+        this.populationProjectionService = populationProjectionService;
+        this.sexCompositionRepository = sexCompositionRepository;
+        this.sexCompositionProjectionService = sexCompositionProjectionService;
+        this.inventoryMovementRepository = inventoryMovementRepository;
+    }
+
+    /** Compatibility constructor retained for focused tests and older integrations. */
+    public SelectionReviewService(BatchSelectionReviewRepository reviewRepository,
+                                  BatchEventRepository eventRepository,
+                                  FarmInputLogRepository inputRepository,
+                                  IncubationCycleRepository incubationRepository,
+                                  FinancialTransactionRepository financeRepository,
+                                  BatchService batchService,
+                                  ObjectMapper objectMapper,
+                                  SelectionSessionService selectionSessionService,
+                                  PopulationProjectionService populationProjectionService,
+                                  BatchSexCompositionRepository sexCompositionRepository) {
+        this(reviewRepository, eventRepository, inputRepository, incubationRepository,
+                financeRepository, batchService, objectMapper, selectionSessionService,
+                populationProjectionService, sexCompositionRepository, null, null);
     }
 
     /** Compatibility constructor for focused unit tests that do not load selection sessions. */
@@ -89,7 +126,7 @@ public class SelectionReviewService {
                                   BatchService batchService,
                                   ObjectMapper objectMapper) {
         this(reviewRepository, eventRepository, inputRepository, incubationRepository,
-                financeRepository, batchService, objectMapper, null);
+                financeRepository, batchService, objectMapper, null, new PopulationProjectionService(), null, null, null);
     }
 
     @Transactional(readOnly = true)
@@ -105,6 +142,7 @@ public class SelectionReviewService {
     public SelectionReviewResponse create(Long batchId, Long farmId, Long userId,
                                           CreateSelectionReviewRequest request) {
         Batch batch = batchService.requireBatch(batchId, farmId);
+        batchService.ensureWritable(batch);
         String idempotencyKey = clean(request == null ? null : request.idempotencyKey());
         if (idempotencyKey != null) {
             var existing = reviewRepository.findByFarmIdAndBatchIdAndIdempotencyKey(farmId, batchId, idempotencyKey);
@@ -158,7 +196,8 @@ public class SelectionReviewService {
     @Transactional
     public SelectionReviewResponse finalize(Long batchId, Long farmId, Long reviewId, Long userId,
                                             FinalizeSelectionReviewRequest request) {
-        batchService.requireBatch(batchId, farmId);
+        Batch batch = batchService.requireBatch(batchId, farmId);
+        batchService.ensureWritable(batch);
         BatchSelectionReview review = reviewRepository.findByIdAndFarmIdAndBatchId(reviewId, farmId, batchId)
                 .orElseThrow(() -> new NotFoundException("Selection review " + reviewId + " not found"));
         if (review.getStatus() == SelectionReviewStatus.FINALIZED) {
@@ -199,6 +238,12 @@ public class SelectionReviewService {
                         batch.getId(), batch.getStartDate(), asOfDate);
         List<FarmInputLog> products = inputRepository.findByFarmIdAndBatchIdOrderByRecordedAtDesc(farmId, batch.getId())
                 .stream().filter(value -> within(value.getRecordedAt(), periodStart, periodEnd)).toList();
+        Map<Long, InventoryMovement> productMovements = inventoryMovementRepository == null ? Map.of()
+                : inventoryMovementRepository.findByFarmIdAndBatchIdAndOccurredAtBetweenOrderByOccurredAtAsc(
+                        farmId, batch.getId(), periodStart.atStartOfDay(farmZone()).toInstant(),
+                        periodEnd.plusDays(1).atStartOfDay(farmZone()).toInstant()).stream()
+                .filter(value -> value.getFarmInputLogId() != null)
+                .collect(java.util.stream.Collectors.toMap(InventoryMovement::getFarmInputLogId, value -> value, (first, ignored) -> first));
 
         // Keep the shared service accessor here so existing report tests and callers retain the
         // same stage fallback behavior. The report's age is still calculated from its as-of date.
@@ -220,8 +265,13 @@ public class SelectionReviewService {
                 .sorted(Comparator.comparing(FarmInputLog::getRecordedAt))
                 .map(value -> new SelectionReviewPayload.ProductUseItem(
                         value.getId(), value.getRecordedAt(), value.getProductType().name(), value.getBrandName(),
-                        value.getProductName(), value.getQuantity(), value.getUnit(), value.getPurpose(),
-                        value.getNotes(), value.getRecordedBy()))
+                        value.getProductName(), value.getQuantity(), value.getUnit(),
+                        productMovements.get(value.getId()) == null ? null : productMovements.get(value.getId()).getUnitCostSnapshot(),
+                        productMovements.get(value.getId()) == null || productMovements.get(value.getId()).getInventoryValueDelta() == null
+                                ? null : productMovements.get(value.getId()).getInventoryValueDelta().abs(),
+                        productMovements.get(value.getId()) == null || productMovements.get(value.getId()).getCostStatus() == null
+                                ? null : productMovements.get(value.getId()).getCostStatus().name(),
+                        value.getPurpose(), value.getNotes(), value.getRecordedBy()))
                 .toList();
 
         SelectionReviewPayload.IncubationSummary incubation = incubationRepository
@@ -247,7 +297,7 @@ public class SelectionReviewService {
                 "Only recorded observations and health-related events are shown; this is not a diagnosis."));
         availability.add(availability("Product-use history", productUse.size(),
                 productUse.stream().map(value -> value.recordedAt().atZone(farmZone()).toLocalDate()).max(LocalDate::compareTo).orElse(null),
-                "Quantity may be unavailable when the farm records only a pack, sachet, or product name."));
+                    "Quantity or historical cost may be unavailable for legacy or unlinked product records."));
         availability.add(incubation == null
                 ? new SelectionReviewPayload.DataAvailabilityItem("Incubation context", "NOT_APPLICABLE", 0, null,
                 "This batch is not linked to a recorded incubation cycle.")
@@ -258,7 +308,7 @@ public class SelectionReviewService {
             availability.add(new SelectionReviewPayload.DataAvailabilityItem("Batch finance", finance == null ? "NO_RECORDS" : finance.postedTransactionCount() == 0 ? "NO_RECORDS" : "PARTIAL",
                     finance == null ? 0 : (int) finance.postedTransactionCount(),
                     finance == null ? null : finance.endDate(),
-                    "Financial totals are recorded cash-flow entries and may be incomplete."));
+                    "Cash-flow totals exclude inventory purchase transactions from batch cost; consumed products are valued separately."));
         }
 
         SelectionReviewPayload.SelectionSummary selectionSummary = null;
@@ -281,6 +331,15 @@ public class SelectionReviewService {
                     "Selection outcome was recorded by a manager; it does not change population automatically."));
         }
 
+        SelectionReviewPayload.SexCompositionSummary sexComposition = sexCompositionSummary(
+                farmId, batch.getId(), asOfDate);
+        availability.add(sexComposition == null
+                ? new SelectionReviewPayload.DataAvailabilityItem("Sex composition", "NO_RECORDS", 0, null,
+                "No whole-batch male/female count was recorded by the report date.")
+                : new SelectionReviewPayload.DataAvailabilityItem("Sex composition", "AVAILABLE", 1,
+                sexComposition.observedOn(),
+                "Whole-batch sex count recorded by the handler or manager; it does not change population."));
+
         SelectionReviewPayload.BatchOverview overview = new SelectionReviewPayload.BatchOverview(
                 batch.getId(), batch.getName(), batch.getBloodline(), batch.getSource(), batch.getInitialPopulation(),
                 population.currentPopulation(), population.currentPopulation() + " / " + batch.getInitialPopulation(),
@@ -293,7 +352,34 @@ public class SelectionReviewService {
                 PAYLOAD_VERSION, periodStart, periodEnd, asOfDate, overview, population, healthEvents, productUse,
                 incubation, finance, availability,
                 selectionSummary,
+                sexComposition,
                 new SelectionReviewPayload.ReviewInstructions(ManagerReviewStatus.NOT_REVIEWED.name(), null, null, null, null));
+    }
+
+    private SelectionReviewPayload.SexCompositionSummary sexCompositionSummary(Long farmId, Long batchId,
+                                                                                 LocalDate asOfDate) {
+        if (sexCompositionRepository == null) return null;
+        BatchSexComposition baseline = sexCompositionRepository
+                .findFirstByBatchIdAndFarmIdAndObservedOnLessThanEqualOrderByObservedOnDescCreatedAtDesc(
+                        batchId, farmId, asOfDate)
+                .orElse(null);
+        if (baseline == null) return null;
+        if (sexCompositionProjectionService != null) {
+            Batch batch = batchService.requireBatch(batchId, farmId);
+            SexCompositionProjection projection = sexCompositionProjectionService.project(batch, farmId, asOfDate);
+            return new SelectionReviewPayload.SexCompositionSummary(
+                    baseline.getId(), baseline.getObservedOn(), projection.total(),
+                    projection.maleCount(), projection.femaleCount(), projection.unclassifiedCount(),
+                    baseline.getRecordedBy(), baseline.getRevisionReason(), baseline.getNotes());
+        }
+        return toSexCompositionSummary(baseline);
+    }
+
+    private SelectionReviewPayload.SexCompositionSummary toSexCompositionSummary(BatchSexComposition value) {
+        return new SelectionReviewPayload.SexCompositionSummary(
+                value.getId(), value.getObservedOn(), value.getPopulationAsOfObservation(),
+                value.getMaleCount(), value.getFemaleCount(), value.getUnclassifiedCount(),
+                value.getRecordedBy(), value.getRevisionReason(), value.getNotes());
     }
 
     private SelectionReviewPayload.PopulationSummary populationSummary(Batch batch, List<BatchEvent> events,
@@ -313,12 +399,9 @@ public class SelectionReviewService {
         categories.put("salesForBreeding", 0L);
         categories.put("salesOtherPurpose", 0L);
 
-        long calculatedPopulation = batch.getInitialPopulation();
         for (BatchEvent event : events) {
-            long delta = populationDelta(event);
-            calculatedPopulation += delta;
-            long amount = Math.abs(event.getPopulationDelta() == null ? delta : (long) event.getPopulationDelta());
-            String key = switch (event.getEventType()) {
+            long amount = Math.abs(populationProjectionService.effectiveDelta(event));
+            String key = event.getEventType() == null ? null : switch (event.getEventType()) {
                 case HEALTH_DEATH -> "healthRelatedDeaths";
                 case ACCIDENTAL_DEATH -> "accidentalDeaths";
                 case SUSPECTED_PREDATION, CONFIRMED_PREDATION -> "predation";
@@ -340,49 +423,29 @@ public class SelectionReviewService {
             }
         }
 
+        PopulationProjection projection = populationProjectionService.project(batch, events, asOfDate, farmZone());
         boolean currentAsOfDate = asOfDate.equals(LocalDate.now(farmZone()));
-        long preferredPopulation = currentAsOfDate ? batch.getCurrentPopulation() : calculatedPopulation;
+        long preferredPopulation = currentAsOfDate && batch.getCurrentPopulation() >= 0
+                && batch.getCurrentPopulation() <= batch.getInitialPopulation()
+                ? batch.getCurrentPopulation()
+                : projection.validPopulation() == null ? projection.boundedPopulation() : projection.validPopulation();
         int boundedPopulation = (int) Math.max(0L,
-                Math.min((long) batch.getInitialPopulation(), preferredPopulation));
-        boolean eventTotalOutsideBounds = calculatedPopulation < 0
-                || calculatedPopulation > batch.getInitialPopulation();
-        boolean currentProjectionOutsideBounds = batch.getCurrentPopulation() < 0
-                || batch.getCurrentPopulation() > batch.getInitialPopulation();
-        boolean projectionMismatch = currentAsOfDate
-                && calculatedPopulation != batch.getCurrentPopulation();
-        boolean reconciliationRequired = eventTotalOutsideBounds
-                || currentProjectionOutsideBounds
-                || projectionMismatch;
-        String reconciliationMessage = reconciliationRequired
-                ? populationReconciliationMessage(batch, calculatedPopulation, boundedPopulation,
-                        currentAsOfDate, projectionMismatch)
-                : null;
+                Math.min((long) Math.max(0, batch.getInitialPopulation()), preferredPopulation));
+        boolean reconciliationRequired = projection.reconciliationRequired();
+        String reconciliationMessage = projection.reconciliationMessage();
 
         long healthDeaths = categories.get("healthRelatedDeaths");
+        long accidentalDeaths = categories.get("accidentalDeaths");
+        long totalDeaths = healthDeaths + accidentalDeaths;
         Double rate = batch.getInitialPopulation() == 0 || healthDeaths > batch.getInitialPopulation() ? null
                 : round(healthDeaths * 100.0 / batch.getInitialPopulation(), 2);
         return new SelectionReviewPayload.PopulationSummary(
-                batch.getInitialPopulation(), boundedPopulation, calculatedPopulation,
+                batch.getInitialPopulation(), boundedPopulation, projection.calculatedPopulation(),
                 reconciliationRequired, reconciliationMessage, healthDeaths, rate,
-                categories.get("accidentalDeaths"), categories.get("predation"), categories.get("missing"),
+                totalDeaths, accidentalDeaths, categories.get("predation"), categories.get("missing"),
                 categories.get("returned"), categories.get("transfersOut"), categories.get("transfersIn"),
                 categories.get("sales"), categories.get("culling"), categories.get("countCorrections"),
                 categories.get("legacyMortalityRecords"), events.size(), categories);
-    }
-
-    private String populationReconciliationMessage(Batch batch, long calculatedPopulation,
-                                                   int boundedPopulation, boolean currentAsOfDate,
-                                                   boolean projectionMismatch) {
-        if (currentAsOfDate && projectionMismatch) {
-            return "Population events calculate " + calculatedPopulation
-                    + " alive, while the batch record contains " + batch.getCurrentPopulation()
-                    + ". Showing " + boundedPopulation
-                    + "; review duplicate, legacy, or incorrect population events.";
-        }
-        return "Population events calculate " + calculatedPopulation
-                + " alive, outside the valid range of 0 to " + batch.getInitialPopulation()
-                + ". Showing " + boundedPopulation
-                + "; review duplicate, legacy, or incorrect population events.";
     }
 
     private SelectionReviewPayload.IncubationSummary incubationSummary(IncubationCycle cycle) {
@@ -406,9 +469,23 @@ public class SelectionReviewService {
         BigDecimal income = posted.stream().filter(value -> value.getType() == FinanceTransactionType.INCOME)
                 .map(FinancialTransaction::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal expense = posted.stream().filter(value -> value.getType() == FinanceTransactionType.EXPENSE)
+                .filter(value -> !"INVENTORY_PURCHASE".equalsIgnoreCase(value.getSourceType()))
                 .map(FinancialTransaction::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal productsConsumed = BigDecimal.ZERO;
+        boolean complete = true;
+        if (inventoryMovementRepository != null) {
+            List<InventoryMovement> movements = inventoryMovementRepository.findByFarmIdAndBatchIdAndOccurredAtBetweenOrderByOccurredAtAsc(
+                    farmId, batchId, start.atStartOfDay(farmZone()).toInstant(), end.plusDays(1).atStartOfDay(farmZone()).toInstant());
+            for (InventoryMovement movement : movements) {
+                if (movement.getMovementType() != InventoryMovementType.USAGE) continue;
+                if (movement.getInventoryValueDelta() == null) complete = false;
+                else productsConsumed = productsConsumed.add(movement.getInventoryValueDelta().abs());
+            }
+        }
+        BigDecimal totalBatchCost = expense.add(productsConsumed);
         return new SelectionReviewPayload.FinanceSummary(start, end, income, expense, income.subtract(expense),
-                posted.size(), true, "Recorded net cash flow is not accounting profit and may omit unentered costs or income.");
+                productsConsumed, totalBatchCost, income.subtract(totalBatchCost), posted.size(), !complete,
+                "Recorded cash flow and consumed inventory cost are shown separately; totals may omit unentered records.");
     }
 
     private SelectionReviewPayload.DataAvailabilityItem availability(String section, int count,
@@ -449,6 +526,7 @@ public class SelectionReviewService {
                     payload.periodStart(), payload.periodEnd(), payload.asOfDate(), payload.batch(), payload.population(),
                     payload.healthEvents(), payload.productUse(), payload.incubation(), null, publicAvailability,
                     payload.selectionSummary(),
+                    payload.sexComposition(),
                     payload.reviewInstructions());
         }
         Instant sourceCutoff = review.getSourceCutoffAt() == null ? review.getGeneratedAt() : review.getSourceCutoffAt();
@@ -456,6 +534,8 @@ public class SelectionReviewService {
                 eventRepository.existsByBatchIdAndCreatedAtAfter(review.getBatchId(), sourceCutoff)
                         || inputRepository.existsByFarmIdAndBatchIdAndCreatedAtAfter(review.getFarmId(), review.getBatchId(), sourceCutoff)
                         || financeRepository.existsByFarmIdAndBatchIdAndCreatedAtAfter(review.getFarmId(), review.getBatchId(), sourceCutoff)
+                        || (sexCompositionRepository != null
+                        && sexCompositionRepository.existsByBatchIdAndFarmIdAndCreatedAtAfter(review.getBatchId(), review.getFarmId(), sourceCutoff))
                         || (selectionSessionService != null
                         && selectionSessionService.hasChangedAfter(review.getBatchId(), review.getFarmId(), sourceCutoff)));
         return new SelectionReviewResponse(review.getId(), review.getFarmId(), review.getBatchId(),
@@ -472,7 +552,7 @@ public class SelectionReviewService {
         return new SelectionReviewPayload(payload.reportTitle(), payload.disclaimer(), payload.payloadVersion(),
                 payload.periodStart(), payload.periodEnd(), payload.asOfDate(), payload.batch(), payload.population(),
                 payload.healthEvents(), payload.productUse(), payload.incubation(), payload.finance(),
-                payload.dataAvailability(), payload.selectionSummary(), instructions);
+                payload.dataAvailability(), payload.selectionSummary(), payload.sexComposition(), instructions);
     }
 
     private String writeJson(SelectionReviewPayload payload) {
@@ -506,6 +586,22 @@ public class SelectionReviewService {
         boolean legacyPayload = !PAYLOAD_VERSION.equals(payload.payloadVersion());
         boolean reconciliationRequired = population.reconciliationRequired()
                 || currentOutsideBounds || batchOutsideBounds;
+        boolean totalDeathsMissing = population.totalDeaths() == 0
+                && (population.healthRelatedDeaths() > 0 || population.accidentalDeaths() > 0);
+        if (!reconciliationRequired && totalDeathsMissing) {
+            long totalDeaths = population.healthRelatedDeaths() + population.accidentalDeaths();
+            SelectionReviewPayload.PopulationSummary compatiblePopulation = new SelectionReviewPayload.PopulationSummary(
+                    population.initialPopulation(), population.currentPopulation(), population.calculatedPopulationFromEvents(),
+                    population.reconciliationRequired(), population.reconciliationMessage(), population.healthRelatedDeaths(),
+                    population.healthRelatedLossPercentage(), totalDeaths, population.accidentalDeaths(), population.predation(),
+                    population.missing(), population.returned(), population.transfersOut(), population.transfersIn(),
+                    population.sales(), population.culling(), population.countCorrections(), population.legacyMortalityRecords(),
+                    population.sourceEventCount(), population.categoryCounts());
+            return new SelectionReviewPayload(payload.reportTitle(), payload.disclaimer(), payload.payloadVersion(),
+                    payload.periodStart(), payload.periodEnd(), payload.asOfDate(), payload.batch(), compatiblePopulation,
+                    payload.healthEvents(), payload.productUse(), payload.incubation(), payload.finance(), payload.dataAvailability(),
+                    payload.selectionSummary(), payload.sexComposition(), payload.reviewInstructions());
+        }
         if (!reconciliationRequired) return payload;
 
         int boundedPopulation = (int) Math.max(0L,
@@ -520,10 +616,13 @@ public class SelectionReviewService {
                     + "; review duplicate, legacy, or incorrect population events.";
         }
 
+        long totalDeaths = population.totalDeaths() > 0
+                ? population.totalDeaths()
+                : population.healthRelatedDeaths() + population.accidentalDeaths();
         SelectionReviewPayload.PopulationSummary safePopulation = new SelectionReviewPayload.PopulationSummary(
                 population.initialPopulation(), boundedPopulation, calculatedPopulation, true, message,
                 population.healthRelatedDeaths(), population.healthRelatedLossPercentage(),
-                population.accidentalDeaths(), population.predation(), population.missing(), population.returned(),
+                totalDeaths, population.accidentalDeaths(), population.predation(), population.missing(), population.returned(),
                 population.transfersOut(), population.transfersIn(), population.sales(), population.culling(),
                 population.countCorrections(), population.legacyMortalityRecords(), population.sourceEventCount(),
                 population.categoryCounts());
@@ -542,7 +641,7 @@ public class SelectionReviewService {
         return new SelectionReviewPayload(payload.reportTitle(), payload.disclaimer(), payload.payloadVersion(),
                 payload.periodStart(), payload.periodEnd(), payload.asOfDate(), safeBatch, safePopulation,
                 payload.healthEvents(), payload.productUse(), payload.incubation(), payload.finance(), availability,
-                payload.selectionSummary(), payload.reviewInstructions());
+                payload.selectionSummary(), payload.sexComposition(), payload.reviewInstructions());
     }
 
     private byte[] renderPdf(SelectionReviewResponse response) {
@@ -556,6 +655,14 @@ public class SelectionReviewService {
             document.add(new Paragraph(payload.batch().batchName() + " | " + response.periodStart() + " to " + response.periodEnd()));
             document.add(new Paragraph("Population: " + payload.batch().currentPopulationDisplay()
                     + " | Stage: " + payload.batch().stageName() + " | Day " + payload.batch().ageDays()));
+            if (payload.sexComposition() == null) {
+                document.add(new Paragraph("Sex composition: Not recorded by the report date."));
+            } else {
+                SelectionReviewPayload.SexCompositionSummary sex = payload.sexComposition();
+                document.add(new Paragraph("Sex composition: " + sex.maleCount() + " male | "
+                        + sex.femaleCount() + " female | " + sex.unclassifiedCount()
+                        + " unclassified (checked " + sex.observedOn() + ")"));
+            }
             if (payload.population().reconciliationRequired()) {
                 document.add(new Paragraph("Population record warning: "
                         + payload.population().reconciliationMessage()));
@@ -578,6 +685,9 @@ public class SelectionReviewService {
             }
             document.add(new Paragraph("Health-related deaths: " + payload.population().healthRelatedDeaths()
                     + " (" + (payload.population().healthRelatedLossPercentage() == null ? "rate unavailable" : payload.population().healthRelatedLossPercentage() + "% of start") + ")"));
+            document.add(new Paragraph("Total deaths: " + payload.population().totalDeaths()
+                    + " (health-related: " + payload.population().healthRelatedDeaths()
+                    + ", accidental: " + payload.population().accidentalDeaths() + ")"));
             document.add(new Paragraph("Health events: " + payload.healthEvents().size() + " | Products used: " + payload.productUse().size()));
             document.add(new Paragraph("\nPopulation changes"));
             payload.population().categoryCounts().forEach((key, value) -> {
@@ -593,7 +703,9 @@ public class SelectionReviewService {
                 payload.productUse().forEach(item -> grouped.computeIfAbsent(item.productType() + " · " + item.brandName() + " · " + (item.unit() == null ? "unit" : item.unit()), ignored -> new ArrayList<>()).add(item));
                 grouped.forEach((key, items) -> {
                     try {
-                        double total = items.stream().filter(item -> item.quantity() != null).mapToDouble(SelectionReviewPayload.ProductUseItem::quantity).sum();
+                        BigDecimal total = items.stream().filter(item -> item.quantity() != null)
+                                .map(SelectionReviewPayload.ProductUseItem::quantity)
+                                .reduce(BigDecimal.ZERO, BigDecimal::add);
                         boolean complete = items.stream().allMatch(item -> item.quantity() != null);
                         document.add(new Paragraph(key + ": " + (complete ? total : items.size() + " recorded use(s), quantity incomplete")));
                     } catch (DocumentException exception) { throw new PdfRenderException(exception); }
@@ -614,17 +726,6 @@ public class SelectionReviewService {
         } catch (DocumentException | PdfRenderException exception) {
             throw new IllegalStateException("Could not render selection review PDF", exception);
         }
-    }
-
-    private long populationDelta(BatchEvent event) {
-        if (event.getPopulationDelta() != null) return event.getPopulationDelta();
-        return switch (event.getEventType()) {
-            case HEALTH_DEATH, MORTALITY, ACCIDENTAL_DEATH, SUSPECTED_PREDATION,
-                    CONFIRMED_PREDATION, MISSING, TRANSFER_OUT, SALE, CULLING ->
-                    -(long) event.getAffectedCount();
-            case FOUND_RETURNED, TRANSFER_IN -> (long) event.getAffectedCount();
-            default -> 0L;
-        };
     }
 
     private Double round(double value, int scale) {

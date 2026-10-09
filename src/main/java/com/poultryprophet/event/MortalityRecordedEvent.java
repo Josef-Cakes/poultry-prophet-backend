@@ -8,6 +8,7 @@ public record MortalityRecordedEvent(
         Long batchId,
         Long handlerId,
         LocalDate eventDate,
+        EventType eventType,
         int affectedCount,
         int remainingPopulation,
         String cause

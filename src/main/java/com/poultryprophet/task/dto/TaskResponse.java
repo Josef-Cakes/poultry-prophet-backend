@@ -6,7 +6,8 @@ import java.time.Instant;
 public record TaskResponse(
         Long id, Long farmId, Long batchId, Long incubationCycleId, String title, String instructions,
         Long assignedHandlerId, Long assignedManagerId, Instant dueAt, String priority, String status,
-        boolean overdue, String completionNote, Instant completedAt, Instant createdAt, Instant updatedAt
+        boolean overdue, String completionNote, Instant completedAt, Instant createdAt, Instant updatedAt,
+        String assignmentScope, Instant visibleFrom, String sourceType, Long sourceId, Long completedBy
 ) {
     public static TaskResponse from(HandlerTask task, Instant now) {
         boolean overdue = task.getDueAt() != null && task.getDueAt().isBefore(now)
@@ -15,6 +16,7 @@ public record TaskResponse(
         return new TaskResponse(task.getId(), task.getFarmId(), task.getBatchId(), task.getIncubationCycleId(),
                 task.getTitle(), task.getInstructions(), task.getAssignedHandlerId(), task.getAssignedManagerId(),
                 task.getDueAt(), task.getPriority().name(), task.getStatus().name(), overdue,
-                task.getCompletionNote(), task.getCompletedAt(), task.getCreatedAt(), task.getUpdatedAt());
+                task.getCompletionNote(), task.getCompletedAt(), task.getCreatedAt(), task.getUpdatedAt(),
+                task.getAssignmentScope(), task.getVisibleFrom(), task.getSourceType(), task.getSourceId(), task.getCompletedBy());
     }
 }

@@ -5,6 +5,7 @@ import com.poultryprophet.input.InputProductType;
 import com.poultryprophet.inventory.InventoryStatus;
 
 import java.time.Instant;
+import java.math.BigDecimal;
 import java.util.UUID;
 
 public record FarmInputLogResponse(
@@ -16,7 +17,7 @@ public record FarmInputLogResponse(
         InputProductType productType,
         String brandName,
         String productName,
-        Double quantity,
+        BigDecimal quantity,
         String unit,
         String route,
         String purpose,
@@ -26,6 +27,9 @@ public record FarmInputLogResponse(
         UUID operationId,
         Long farmProductId,
         Long inventoryMovementId,
+        BigDecimal unitCostSnapshot,
+        BigDecimal calculatedCost,
+        String costStatus,
         InventoryStatus inventoryStatus,
         Integer affectedBirdCount
 ) {
@@ -34,6 +38,7 @@ public record FarmInputLogResponse(
                 log.getIncubationCycleId(), log.getRecordedAt(), log.getProductType(),
                 log.getBrandName(), log.getProductName(), log.getQuantity(), log.getUnit(),
                 log.getRoute(), log.getPurpose(), log.getNotes(), log.getRecordedBy(), log.getCreatedAt(), log.getOperationId(),
-                log.getFarmProductId(), log.getInventoryMovementId(), log.getInventoryStatus(), log.getAffectedBirdCount());
+                log.getFarmProductId(), log.getInventoryMovementId(), log.getUnitCostSnapshot(), log.getCalculatedCost(), log.getCostStatus(),
+                log.getInventoryStatus(), log.getAffectedBirdCount());
     }
 }

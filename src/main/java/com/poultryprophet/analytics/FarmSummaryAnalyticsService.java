@@ -16,6 +16,8 @@ import com.poultryprophet.incubation.IncubationCycleRepository;
 import com.poultryprophet.incubation.IncubationStatus;
 import com.poultryprophet.input.FarmInputLog;
 import com.poultryprophet.input.FarmInputLogRepository;
+import com.poultryprophet.population.PopulationProjection;
+import com.poultryprophet.population.PopulationProjectionService;
 import com.poultryprophet.task.HandlerTask;
 import com.poultryprophet.task.HandlerTaskRepository;
 import com.poultryprophet.task.TaskStatus;
@@ -51,6 +53,7 @@ public class FarmSummaryAnalyticsService {
     private final HandlerTaskRepository taskRepository;
     private final IncubationCycleRepository incubationRepository;
     private final FarmInputLogRepository inputRepository;
+    private final PopulationProjectionService populationProjectionService;
     private final ZoneId farmZone;
 
     public FarmSummaryAnalyticsService(BatchRepository batchRepository,
@@ -59,6 +62,7 @@ public class FarmSummaryAnalyticsService {
                                         HandlerTaskRepository taskRepository,
                                         IncubationCycleRepository incubationRepository,
                                         FarmInputLogRepository inputRepository,
+                                        PopulationProjectionService populationProjectionService,
                                         @Value("${app.time-zone:Asia/Manila}") String timeZone) {
         this.batchRepository = batchRepository;
         this.eventRepository = eventRepository;
@@ -66,6 +70,7 @@ public class FarmSummaryAnalyticsService {
         this.taskRepository = taskRepository;
         this.incubationRepository = incubationRepository;
         this.inputRepository = inputRepository;
+        this.populationProjectionService = populationProjectionService;
         this.farmZone = ZoneId.of(timeZone);
     }
 
@@ -101,7 +106,20 @@ public class FarmSummaryAnalyticsService {
         Set<Long> batchIds = scopedBatches.stream().map(Batch::getId).collect(Collectors.toSet());
         long activeBatches = scopedBatches.stream().filter(batch -> batch.getStatus() == BatchStatus.ACTIVE).count();
         long initialPopulation = scopedBatches.stream().mapToLong(Batch::getInitialPopulation).sum();
-        long currentPopulation = scopedBatches.stream().mapToLong(Batch::getCurrentPopulation).sum();
+        LocalDate populationAsOf = LocalDate.now(farmZone);
+        List<String> populationLimitations = new ArrayList<>();
+        long currentPopulation = scopedBatches.stream().mapToLong(batch -> {
+            List<BatchEvent> ledgerEvents = eventRepository
+                    .findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(
+                            batch.getId(), batch.getStartDate(), populationAsOf);
+            PopulationProjection projection = populationProjectionService.project(
+                    batch, ledgerEvents, populationAsOf, farmZone);
+            if (projection.reconciliationRequired()) {
+                populationLimitations.add("Population records need review for batch '" + batch.getName() + "'.");
+                return projection.boundedPopulation();
+            }
+            return projection.validPopulation() == null ? projection.boundedPopulation() : projection.validPopulation();
+        }).sum();
         FarmSummaryAnalyticsResponse.PopulationSummary population =
                 new FarmSummaryAnalyticsResponse.PopulationSummary(activeBatches, initialPopulation, currentPopulation, !scopedBatches.isEmpty());
 
@@ -125,6 +143,7 @@ public class FarmSummaryAnalyticsService {
 
         FarmSummaryAnalyticsResponse.FinanceSummary financeSummary = finance(finance, start, end, farmWide);
         List<String> limitations = new ArrayList<>();
+        limitations.addAll(populationLimitations);
         if (scopedBatches.isEmpty()) limitations.add("No batches match this view.");
         if (batchId != null && financeSummary.available()) limitations.add(financeSummary.limitation());
         if (!cycles.isEmpty() && cycles.stream().anyMatch(cycle -> cycle.getStatus() != IncubationStatus.COMPLETED)) {

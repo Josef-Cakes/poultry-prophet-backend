@@ -14,16 +14,24 @@ public record BatchResponse(
         String name,
         int initialPopulation,
         int currentPopulation,
+        String populationStatus,
+        String populationWarning,
         LocalDate startDate,
         String bloodline,
         String source,
+        Instant hatchDateConfirmedAt,
+        Long hatchDateConfirmedByUserId,
         Long stageId,
         String stageName,
         // True when the stage shown is derived from the batch's age (not a manual override).
         boolean stageAuto,
         BatchStatus status,
         List<Long> handlerUserIds,
-        Instant createdAt
+        Instant createdAt,
+        Instant archivedAt,
+        Long archivedByUserId,
+        String archiveReason,
+        BatchStatus preArchiveStatus
 ) {
     /**
      * @param effectiveStage the stage to display — either the age-derived stage or the manual
@@ -32,20 +40,36 @@ public record BatchResponse(
      */
     public static BatchResponse from(Batch batch, List<Long> handlerUserIds,
                                      LifecycleStage effectiveStage, boolean stageAuto) {
+        return from(batch, handlerUserIds, effectiveStage, stageAuto,
+                batch.getCurrentPopulation(), "VALID", null);
+    }
+
+    public static BatchResponse from(Batch batch, List<Long> handlerUserIds,
+                                     LifecycleStage effectiveStage, boolean stageAuto,
+                                     int displayPopulation, String populationStatus,
+                                     String populationWarning) {
         return new BatchResponse(
                 batch.getId(),
                 batch.getFarmId(),
                 batch.getName(),
                 batch.getInitialPopulation(),
-                batch.getCurrentPopulation(),
+                displayPopulation,
+                populationStatus,
+                populationWarning,
                 batch.getStartDate(),
                 batch.getBloodline(),
                 batch.getSource(),
+                batch.getHatchDateConfirmedAt(),
+                batch.getHatchDateConfirmedByUserId(),
                 effectiveStage.getId(),
                 effectiveStage.getName(),
                 stageAuto,
                 batch.getStatus(),
                 handlerUserIds,
-                batch.getCreatedAt());
+                batch.getCreatedAt(),
+                batch.getArchivedAt(),
+                batch.getArchivedByUserId(),
+                batch.getArchiveReason(),
+                batch.getPreArchiveStatus());
     }
 }

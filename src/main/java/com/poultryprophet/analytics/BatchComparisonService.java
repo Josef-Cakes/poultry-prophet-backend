@@ -8,6 +8,8 @@ import com.poultryprophet.event.BatchEventRepository;
 import com.poultryprophet.event.EventType;
 import com.poultryprophet.input.FarmInputLog;
 import com.poultryprophet.input.FarmInputLogRepository;
+import com.poultryprophet.population.PopulationProjection;
+import com.poultryprophet.population.PopulationProjectionService;
 import com.poultryprophet.selectionsession.SelectionSessionResponse;
 import com.poultryprophet.selectionsession.SelectionSessionService;
 import org.springframework.beans.factory.annotation.Value;
@@ -15,6 +17,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
@@ -32,18 +35,24 @@ public class BatchComparisonService {
     private final BatchEventRepository eventRepository;
     private final FarmInputLogRepository inputRepository;
     private final SelectionSessionService selectionSessionService;
+    private final PopulationProjectionService populationProjectionService;
+    private final Clock clock;
     private final ZoneId farmZone;
 
     public BatchComparisonService(BatchRepository batchRepository,
                                   BatchEventRepository eventRepository,
                                   FarmInputLogRepository inputRepository,
                                   SelectionSessionService selectionSessionService,
-                                  @Value("${app.time-zone:Asia/Manila}") String timeZone) {
+                                  @Value("${app.time-zone:Asia/Manila}") String timeZone,
+                                  PopulationProjectionService populationProjectionService,
+                                  Clock clock) {
         this.batchRepository = batchRepository;
         this.eventRepository = eventRepository;
         this.inputRepository = inputRepository;
         this.selectionSessionService = selectionSessionService;
+        this.populationProjectionService = populationProjectionService;
         this.farmZone = ZoneId.of(timeZone);
+        this.clock = clock.withZone(this.farmZone);
     }
 
     @Transactional(readOnly = true)
@@ -69,7 +78,7 @@ public class BatchComparisonService {
             }
         }
 
-        LocalDate today = LocalDate.now(farmZone);
+        LocalDate today = LocalDate.now(clock);
         int availableWindowDays = batches.stream()
                 .mapToInt(batch -> (int) Math.max(1, ChronoUnit.DAYS.between(batch.getStartDate(), today) + 1))
                 .min().orElse(1);
@@ -83,6 +92,10 @@ public class BatchComparisonService {
 
         List<BatchComparisonResponse.BatchComparisonRow> rows = batches.stream()
                 .map(batch -> row(farmId, batch, effectiveDays)).toList();
+        rows.stream()
+                .filter(row -> row.populationStatus().equals(PopulationProjection.RECONCILIATION_REQUIRED))
+                .forEach(row -> warnings.add("Population records need review for batch '" + row.batchName()
+                        + "'; comparison population is unavailable."));
         boolean mixedSelectionAvailability = rows.stream()
                 .map(BatchComparisonResponse.BatchComparisonRow::selectionDataStatus)
                 .distinct().count() > 1;
@@ -94,12 +107,10 @@ public class BatchComparisonService {
         LocalDate end = batch.getStartDate().plusDays(windowDays - 1L);
         List<BatchEvent> events = eventRepository.findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(
                 batch.getId(), batch.getStartDate(), end);
-        int population = batch.getInitialPopulation();
         long healthDeaths = 0;
         long healthConcerns = 0;
         Map<String, Long> changes = new LinkedHashMap<>();
         for (BatchEvent event : events) {
-            population += populationDelta(event);
             if (event.getEventType() == EventType.HEALTH_DEATH) healthDeaths += event.getAffectedCount();
             if (event.getEventType() == EventType.HEALTH_CONCERN) healthConcerns++;
             String cause = cause(event.getEventType());
@@ -110,15 +121,18 @@ public class BatchComparisonService {
         List<FarmInputLog> productRecords = inputRepository.findByFarmIdAndBatchIdOrderByRecordedAtDesc(farmId, batch.getId())
                 .stream().filter(input -> within(input, batch.getStartDate(), end)).toList();
         SelectionSessionResponse selection = selectionSessionService.latestFinalized(batch.getId(), farmId, end);
+        PopulationProjection projection = populationProjectionService.project(batch, events, end, farmZone);
         List<String> limitations = new ArrayList<>();
         if (events.isEmpty()) limitations.add("No event records for this common window.");
         if (productRecords.isEmpty()) limitations.add("No product-use records for this common window.");
         if (selection == null) limitations.add("No finalized selection session in this common window.");
+        if (projection.reconciliationRequired()) limitations.add(projection.reconciliationMessage());
         Double lossRate = batch.getInitialPopulation() == 0 ? null
                 : round(healthDeaths * 100.0 / batch.getInitialPopulation());
         return new BatchComparisonResponse.BatchComparisonRow(
                 batch.getId(), batch.getName(), batch.getBloodline(), batch.getSource(), batch.getStartDate(), end,
-                batch.getInitialPopulation(), population, healthDeaths, lossRate, healthConcerns,
+                batch.getInitialPopulation(), projection.validPopulation(), projection.status(),
+                projection.reconciliationMessage(), projection.firstInvalidEventDate(), healthDeaths, lossRate, healthConcerns,
                 productRecords.size(), changes,
                 selection == null ? null : selection.evaluatedCount(), selection == null ? null : selection.acceptedCount(),
                 selection == null ? null : selection.selectionRatePercent(), selection == null ? "NO_RECORD" : "AVAILABLE",
@@ -129,16 +143,6 @@ public class BatchComparisonService {
         if (input.getRecordedAt() == null) return false;
         return !input.getRecordedAt().isBefore(start.atStartOfDay(farmZone).toInstant())
                 && input.getRecordedAt().isBefore(end.plusDays(1).atStartOfDay(farmZone).toInstant());
-    }
-
-    private int populationDelta(BatchEvent event) {
-        if (event.getPopulationDelta() != null) return event.getPopulationDelta();
-        return switch (event.getEventType()) {
-            case HEALTH_DEATH, MORTALITY, ACCIDENTAL_DEATH, SUSPECTED_PREDATION,
-                    CONFIRMED_PREDATION, MISSING, TRANSFER_OUT, SALE, CULLING -> -event.getAffectedCount();
-            case FOUND_RETURNED, TRANSFER_IN -> event.getAffectedCount();
-            default -> 0;
-        };
     }
 
     private String cause(EventType type) {

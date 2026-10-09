@@ -59,7 +59,7 @@ public class TaskService {
     public List<TaskResponse> list(Long farmId, Long handlerId, boolean mine) {
         requireFarm(farmId);
         List<HandlerTask> tasks = mine
-                ? taskRepository.findByFarmIdAndAssignedHandlerIdOrderByDueAtAscCreatedAtDesc(farmId, handlerId)
+                ? taskRepository.findVisibleToHandler(farmId, handlerId, Instant.now())
                 : taskRepository.findByFarmIdOrderByDueAtAscCreatedAtDesc(farmId);
         return tasks.stream().map(this::response).toList();
     }
@@ -72,6 +72,7 @@ public class TaskService {
     @Transactional
     public TaskResponse update(Long id, Long farmId, Long managerId, UpdateTaskRequest request) {
         HandlerTask task = require(id, farmId);
+        if (task.getBatchId() != null) batchService.requireWritableBatch(task.getBatchId(), farmId);
         if (request.title() != null && !request.title().isBlank()) task.setTitle(request.title().trim());
         if (request.instructions() != null) task.setInstructions(trim(request.instructions()));
         if (request.batchId() != null || request.incubationCycleId() != null || request.assignedHandlerId() != null) {
@@ -84,6 +85,8 @@ public class TaskService {
         if (request.dueAt() != null) task.setDueAt(request.dueAt());
         if (request.priority() != null) task.setPriority(request.priority());
         if (request.completionNote() != null) task.setCompletionNote(trim(request.completionNote()));
+        if ("VACCINATION_PLAN".equals(task.getSourceType()) && request.status() == TaskStatus.COMPLETED)
+            throw new BadRequestException("Vaccination tasks are completed through the vaccination confirmation action");
         if (request.status() != null && request.status() != task.getStatus()) applyStatus(task, request.status(), managerId, task.getCompletionNote());
         task.setUpdatedAt(Instant.now());
         return response(taskRepository.save(task));
@@ -93,7 +96,12 @@ public class TaskService {
     public TaskResponse updateStatus(Long id, Long farmId, Long actorId, boolean manager,
                                      UpdateTaskStatusRequest request) {
         HandlerTask task = require(id, farmId);
-        if (!manager && !actorId.equals(task.getAssignedHandlerId())) {
+        if (task.getBatchId() != null) batchService.requireWritableBatch(task.getBatchId(), farmId);
+        if ("VACCINATION_PLAN".equals(task.getSourceType()) && request.status() == TaskStatus.COMPLETED) {
+            throw new BadRequestException("Vaccination tasks are completed through the vaccination confirmation action");
+        }
+        boolean batchTeam = "BATCH_TEAM".equals(task.getAssignmentScope()) || "FARM_TEAM".equals(task.getAssignmentScope());
+        if (!manager && !batchTeam && !actorId.equals(task.getAssignedHandlerId())) {
             throw new BadRequestException("Only the assigned handler can update this task");
         }
         applyStatus(task, request.status(), actorId, request.note());
@@ -108,7 +116,7 @@ public class TaskService {
     }
 
     private void validateReferences(Long farmId, Long batchId, Long cycleId, Long handlerId) {
-        if (batchId != null) batchService.requireBatch(batchId, farmId);
+        if (batchId != null) batchService.requireWritableBatch(batchId, farmId);
         if (cycleId != null) incubationService.require(cycleId, farmId);
         if (handlerId != null) {
             User handler = userRepository.findById(handlerId)
@@ -124,8 +132,8 @@ public class TaskService {
         if (status == null) return;
         task.setStatus(status);
         if (note != null) task.setCompletionNote(trim(note));
-        if (status == TaskStatus.COMPLETED) task.setCompletedAt(Instant.now());
-        else task.setCompletedAt(null);
+        if (status == TaskStatus.COMPLETED) { task.setCompletedAt(Instant.now()); task.setCompletedBy(actorId); }
+        else { task.setCompletedAt(null); task.setCompletedBy(null); }
         recordStatus(task, actorId, status, note);
     }
 

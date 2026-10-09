@@ -17,8 +17,20 @@ public record CreateBatchEventRequest(
         String details,
         String tags,
         @NotNull UUID operationId,
-        Integer populationDelta
+        Integer populationDelta,
+        SexAllocation sexAllocation
 ) {
+    public record SexAllocation(Integer maleDelta, Integer femaleDelta, Integer unclassifiedDelta) {
+        public boolean isComplete() {
+            return maleDelta != null && femaleDelta != null && unclassifiedDelta != null;
+        }
+
+        public int totalDelta() {
+            if (!isComplete()) throw new IllegalStateException("Sex allocation is incomplete");
+            return maleDelta + femaleDelta + unclassifiedDelta;
+        }
+    }
+
     /** Compatibility constructor for existing unit fixtures; real clients must send operationId. */
     public CreateBatchEventRequest(LocalDate eventDate,
                                    EventType eventType,
@@ -28,6 +40,20 @@ public record CreateBatchEventRequest(
                                    String details,
                                    String tags) {
         this(eventDate, eventType, title, severityLabel, affectedCount, details, tags,
-                UUID.randomUUID(), null);
+                UUID.randomUUID(), null, null);
+    }
+
+    /** Compatibility constructor for existing imports and fixtures that provide an operation ID. */
+    public CreateBatchEventRequest(LocalDate eventDate,
+                                   EventType eventType,
+                                   String title,
+                                   String severityLabel,
+                                   int affectedCount,
+                                   String details,
+                                   String tags,
+                                   UUID operationId,
+                                   Integer populationDelta) {
+        this(eventDate, eventType, title, severityLabel, affectedCount, details, tags,
+                operationId, populationDelta, null);
     }
 }

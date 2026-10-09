@@ -39,6 +39,13 @@ public class Batch {
     @Column(nullable = false)
     private LocalDate startDate;
 
+    /** startDate is the hatch date. Legacy batches may be unconfirmed until a manager verifies it. */
+    @Column(name = "hatch_date_confirmed_at")
+    private Instant hatchDateConfirmedAt;
+
+    @Column(name = "hatch_date_confirmed_by_user_id")
+    private Long hatchDateConfirmedByUserId;
+
     /**
      * Blueprint 5.3: bloodline/breed is collected as descriptive, filterable metadata only.
      * It is deliberately NOT used in scoring (breed-based scoring cannot be validated without
@@ -68,6 +75,19 @@ public class Batch {
 
     @Column(nullable = false, updatable = false)
     private Instant createdAt = Instant.now();
+
+    @Column(name = "archived_at")
+    private Instant archivedAt;
+
+    @Column(name = "archived_by_user_id")
+    private Long archivedByUserId;
+
+    @Column(name = "archive_reason", length = 500)
+    private String archiveReason;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "pre_archive_status")
+    private BatchStatus preArchiveStatus;
 
     /** SDD 2.2: stage helper consumed by the worker before invoking computeBsi. */
     public boolean isBrooding() {
@@ -122,6 +142,11 @@ public class Batch {
         this.startDate = startDate;
     }
 
+    public Instant getHatchDateConfirmedAt() { return hatchDateConfirmedAt; }
+    public void setHatchDateConfirmedAt(Instant value) { this.hatchDateConfirmedAt = value; }
+    public Long getHatchDateConfirmedByUserId() { return hatchDateConfirmedByUserId; }
+    public void setHatchDateConfirmedByUserId(Long value) { this.hatchDateConfirmedByUserId = value; }
+
     public String getBloodline() {
         return bloodline;
     }
@@ -169,4 +194,13 @@ public class Batch {
     public void setCreatedAt(Instant createdAt) {
         this.createdAt = createdAt;
     }
+
+    public Instant getArchivedAt() { return archivedAt; }
+    public void setArchivedAt(Instant archivedAt) { this.archivedAt = archivedAt; }
+    public Long getArchivedByUserId() { return archivedByUserId; }
+    public void setArchivedByUserId(Long archivedByUserId) { this.archivedByUserId = archivedByUserId; }
+    public String getArchiveReason() { return archiveReason; }
+    public void setArchiveReason(String archiveReason) { this.archiveReason = archiveReason; }
+    public BatchStatus getPreArchiveStatus() { return preArchiveStatus; }
+    public void setPreArchiveStatus(BatchStatus preArchiveStatus) { this.preArchiveStatus = preArchiveStatus; }
 }

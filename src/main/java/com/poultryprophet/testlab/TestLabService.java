@@ -218,11 +218,11 @@ public class TestLabService {
                               LocalDate startDate, String runId) {
         inputService.create(farmId, actorId, actorRole, new CreateFarmInputRequest(
                 batchId, null, instant(day(startDate, 5)), InputProductType.FEED,
-                "Baby Stag Booster", "Starter feed", 1.0, "pack", null,
+                "Baby Stag Booster", "Starter feed", new java.math.BigDecimal("1.0"), "pack", null,
                 "Routine feed record", "Synthetic Test Lab input; actual intake is not claimed."));
         inputService.create(farmId, actorId, actorRole, new CreateFarmInputRequest(
                 batchId, null, instant(day(startDate, 50)), InputProductType.MEDICINE,
-                "Validation Vitamin Sachet", "Soluble vitamin", 1.0, "sachet",
+                "Validation Vitamin Sachet", "Soluble vitamin", new java.math.BigDecimal("1.0"), "sachet",
                 "SOLUBLE_IN_WATER", "Recorded health intervention",
                 "Synthetic Test Lab input " + runId + "; actual intake is not claimed."));
     }

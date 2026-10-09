@@ -15,6 +15,12 @@ import com.poultryprophet.sync.dto.SyncOperationResult;
 import com.poultryprophet.sync.dto.SyncOperationsRequest;
 import com.poultryprophet.sync.dto.SyncOperationsResponse;
 import com.poultryprophet.user.Role;
+import com.poultryprophet.sexcomposition.BatchSexCompositionService;
+import com.poultryprophet.sexcomposition.dto.CreateSexCompositionRequest;
+import com.poultryprophet.sexcomposition.dto.SexCompositionResponse;
+import com.poultryprophet.vaccination.VaccinationService;
+import com.poultryprophet.vaccination.dto.RecordVaccinationRequest;
+import com.poultryprophet.vaccination.dto.VaccinationPlanItemResponse;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -28,11 +34,13 @@ public class SyncOperationService {
     private final ObjectMapper objectMapper;
     private final BatchEventService eventService;
     private final FarmInputService inputService;
+    private final BatchSexCompositionService sexCompositionService;
+    private final VaccinationService vaccinationService;
 
-    public SyncOperationService(ObjectMapper objectMapper, BatchEventService eventService, FarmInputService inputService) {
-        this.objectMapper = objectMapper;
-        this.eventService = eventService;
-        this.inputService = inputService;
+    public SyncOperationService(ObjectMapper objectMapper, BatchEventService eventService, FarmInputService inputService,
+                                BatchSexCompositionService sexCompositionService, VaccinationService vaccinationService) {
+        this.objectMapper = objectMapper; this.eventService = eventService; this.inputService = inputService;
+        this.sexCompositionService = sexCompositionService; this.vaccinationService = vaccinationService;
     }
 
     public SyncOperationsResponse sync(SyncOperationsRequest request, Long farmId, Long userId, Role role) {
@@ -79,6 +87,20 @@ public class SyncOperationService {
                     throw new BadRequestException("The operation batch does not match the input payload");
                 }
                 FarmInputLogResponse saved = inputService.create(farmId, userId, role, payload);
+                yield SyncOperationResult.applied(operation.operationId(), saved.id());
+            }
+            case "SEX_COMPOSITION" -> {
+                CreateSexCompositionRequest payload = objectMapper.convertValue(operation.payload(), CreateSexCompositionRequest.class);
+                if (!operation.operationId().equals(payload.operationId())) throw new BadRequestException("The operation ID does not match the sex composition payload");
+                SexCompositionResponse saved = sexCompositionService.record(operation.batchId(), farmId, userId, payload);
+                yield SyncOperationResult.applied(operation.operationId(), saved.id());
+            }
+            case "VACCINATION_PLAN" -> {
+                Long planId = operation.payload().path("planId").asLong(0);
+                if (planId <= 0) throw new BadRequestException("Vaccination sync payload is missing planId");
+                RecordVaccinationRequest payload = objectMapper.convertValue(operation.payload(), RecordVaccinationRequest.class);
+                if (!operation.operationId().equals(payload.operationId())) throw new BadRequestException("The operation ID does not match the vaccination payload");
+                VaccinationPlanItemResponse saved = vaccinationService.record(planId, farmId, userId, role, payload);
                 yield SyncOperationResult.applied(operation.operationId(), saved.id());
             }
             default -> throw new BadRequestException("Unsupported offline operation: " + operation.entityType());

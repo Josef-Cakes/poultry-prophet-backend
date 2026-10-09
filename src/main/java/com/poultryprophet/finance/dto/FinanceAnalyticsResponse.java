@@ -21,6 +21,10 @@ public record FinanceAnalyticsResponse(
             BigDecimal recordedIncome,
             BigDecimal recordedExpense,
             BigDecimal recordedNetCashFlow,
+            BigDecimal productsConsumedCost,
+            BigDecimal totalRecordedBatchCost,
+            BigDecimal recordedContribution,
+            boolean productCostComplete,
             long postedTransactionCount,
             long voidedTransactionCount
     ) {}
