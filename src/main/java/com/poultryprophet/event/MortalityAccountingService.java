@@ -4,6 +4,7 @@ import com.poultryprophet.batch.Batch;
 import com.poultryprophet.batch.BatchRepository;
 import com.poultryprophet.batch.BatchService;
 import com.poultryprophet.common.BadRequestException;
+import com.poultryprophet.common.ConflictException;
 import com.poultryprophet.common.DateValidationService;
 import com.poultryprophet.event.dto.CreateBatchEventRequest;
 import com.poultryprophet.population.PopulationProjection;
@@ -76,20 +77,29 @@ public class MortalityAccountingService {
         Batch batch = batchService.requireBatchForUpdate(batchId, farmId);
         batchService.ensureWritable(batch);
 
+        int delta;
+        try {
+            delta = type.populationDelta(request.affectedCount(), request.populationDelta());
+        } catch (IllegalArgumentException ex) {
+            throw new BadRequestException(ex.getMessage());
+        }
+
         if (request.operationId() != null) {
             BatchEvent existing = eventRepository.findByOperationId(request.operationId()).orElse(null);
             if (existing != null) {
                 if (!batchId.equals(existing.getBatchId())
                         || (existing.getEventType() != null && existing.getEventType() != type)
                         || (existing.getEventDate() != null && !java.util.Objects.equals(existing.getEventDate(), date))
-                        || (existing.getAffectedCount() != 0 && existing.getAffectedCount() != request.affectedCount())
+                        || existing.getAffectedCount() != request.affectedCount()
+                        || !java.util.Objects.equals(existing.getSeverityLabel(), request.severityLabel())
+                        || !java.util.Objects.equals(existing.getPopulationDelta(), delta)
                         || !java.util.Objects.equals(existing.getMaleDelta(), maleDelta(request))
                         || !java.util.Objects.equals(existing.getFemaleDelta(), femaleDelta(request))
                         || !java.util.Objects.equals(existing.getUnclassifiedDelta(), unclassifiedDelta(request))
                         || (existing.getTitle() != null && !java.util.Objects.equals(existing.getTitle(), request.title()))
                         || (existing.getDetails() != null && !java.util.Objects.equals(existing.getDetails(), request.details()))
                         || (existing.getTags() != null && !java.util.Objects.equals(existing.getTags(), request.tags()))) {
-                    throw new BadRequestException("operationId has already been used for a different population event");
+                    throw new ConflictException("operationId has already been used for a different population event");
                 }
                 return new MortalityAccountingResult(existing,
                         existing.getPopulationAfter() != null
@@ -98,12 +108,6 @@ public class MortalityAccountingService {
             }
         }
 
-        int delta;
-        try {
-            delta = type.populationDelta(request.affectedCount(), request.populationDelta());
-        } catch (IllegalArgumentException ex) {
-            throw new BadRequestException(ex.getMessage());
-        }
         validate(batch, date, request.affectedCount(), delta, type);
 
         BatchEvent event = new BatchEvent();

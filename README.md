@@ -65,6 +65,12 @@ $env:JWT_SECRET="<a base64 string of at least 32 bytes>"
 
 `spring.jpa.hibernate.ddl-auto=update` creates/updates tables automatically on a local validation
 run. Production schema changes require a reviewed migration and backup.
+The Hikari pool defaults to at most five connections per backend process (one idle connection).
+For Supabase's session pooler, budget that limit across every backend instance using the same
+database role and database; leave room for local tools and overlapping deploys. If startup reports
+`EMAXCONNSESSION`, inspect active pooler clients and stop stale app instances before increasing the
+pool limit. The limit can be set with `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE` when capacity
+has been confirmed.
 On startup a `DataSeeder` inserts the game fowl lifecycle stages (`brooding`, `ranging`,
 `pre-conditioning`, `maintenance`, `conditioning`) and default alert thresholds
 (BHI 60–100, BSI 0–40, WFR 1.5–2.5).
@@ -140,8 +146,13 @@ batches within that farm.
 - `PATCH /api/batches/{id}/restore` *(MANAGER)* — bring an archived batch back to the working list.
 - `POST /api/batches/{id}/records` — record a daily **brooding** entry (1.1); idempotent per (batch, date).
 - `GET  /api/batches/{id}/records?limit=14` — recent submissions.
-- `POST /api/sync/batch` — legacy sync endpoint retained for later review; offline capability is
-  not a validated MVP claim.
+- `POST /api/sync/v2/operations` — authenticated replay endpoint for version-1 `BATCH_EVENT`,
+  batch-linked `FARM_INPUT`, and manager-only `SELECTION_SESSION` draft create/update operations
+  (up to 25 per request). Each operation returns its own applied, already-applied, conflict,
+  rejected, or retryable result. This API supports the browser outbox. Selection-session
+  finalization stays on the normal API so current
+  population rules are checked before it is finalized. Offline/PWA behavior is not a validated MVP
+  claim. The older `POST /api/sync/batch` endpoint remains for legacy daily-record sync.
 - `POST /api/batches/{id}/birds` — band an individual bird (Blueprint 5.4); unique band number per batch.
 - `GET  /api/batches/{id}/birds` — list banded birds.
 - `POST /api/batches/{id}/birds/{birdId}/ranging` — weekly per-bird ranging milestone

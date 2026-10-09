@@ -2,6 +2,7 @@ package com.poultryprophet.event;
 
 import com.poultryprophet.batch.Batch;
 import com.poultryprophet.batch.BatchService;
+import com.poultryprophet.common.ConflictException;
 import com.poultryprophet.common.DateValidationService;
 import com.poultryprophet.common.QueryLimits;
 import com.poultryprophet.event.dto.BatchEventResponse;
@@ -61,11 +62,12 @@ public class BatchEventService {
             if (!batchId.equals(existing.getBatchId())
                     || (existing.getEventType() != null && existing.getEventType() != req.eventType())
                     || (existing.getEventDate() != null && !java.util.Objects.equals(existing.getEventDate(), date))
-                    || (existing.getAffectedCount() != 0 && existing.getAffectedCount() != req.affectedCount())
+                    || existing.getAffectedCount() != req.affectedCount()
+                    || !java.util.Objects.equals(existing.getSeverityLabel(), req.severityLabel())
                     || (existing.getTitle() != null && !java.util.Objects.equals(existing.getTitle(), req.title()))
                     || (existing.getDetails() != null && !java.util.Objects.equals(existing.getDetails(), req.details()))
                     || (existing.getTags() != null && !java.util.Objects.equals(existing.getTags(), req.tags()))) {
-                throw new com.poultryprophet.common.BadRequestException(
+                throw new ConflictException(
                         "operationId has already been used for a different event record");
             }
             String existingHandlerName = userRepository.findById(existing.getHandlerId())
