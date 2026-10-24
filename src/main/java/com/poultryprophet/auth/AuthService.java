@@ -25,17 +25,20 @@
         private final FarmRepository farmRepository;
         private final PasswordEncoder passwordEncoder;
         private final JwtService jwtService;
+        private final RefreshTokenService refreshTokenService;
         private final AuthenticationManager authenticationManager;
 
         public AuthService(UserRepository userRepository,
                         FarmRepository farmRepository,
                         PasswordEncoder passwordEncoder,
                         JwtService jwtService,
+                        RefreshTokenService refreshTokenService,
                         AuthenticationManager authenticationManager) {
             this.userRepository = userRepository;
             this.farmRepository = farmRepository;
             this.passwordEncoder = passwordEncoder;
             this.jwtService = jwtService;
+            this.refreshTokenService = refreshTokenService;
             this.authenticationManager = authenticationManager;
         }
 
@@ -70,13 +73,33 @@
             return toResponse(user);
         }
 
+        public AuthResponse refresh(String refreshToken) {
+            RefreshTokenService.Rotation rotation = refreshTokenService.rotate(refreshToken);
+            return toResponse(rotation.user(), rotation.rawToken(), rotation.expiresAt());
+        }
+
+        public void logout(String refreshToken) {
+            refreshTokenService.revoke(refreshToken);
+        }
+
+        public void logoutAll(Long userId) {
+            refreshTokenService.revokeAllForUser(userId);
+        }
+
         public AuthResponse toResponse(User user) {
+            RefreshTokenService.IssuedToken refreshToken = refreshTokenService.issue(user);
+            return toResponse(user, refreshToken.rawToken(), refreshToken.expiresAt());
+        }
+
+        private AuthResponse toResponse(User user, String refreshToken, java.time.Instant refreshTokenExpiresAt) {
             return new AuthResponse(
                     jwtService.generateToken(user),
                     user.getId(),
                     user.getEmail(),
                     user.getFullName(),
                     user.getRole(),
-                    user.getFarmId());
+                    user.getFarmId(),
+                    refreshToken,
+                    refreshTokenExpiresAt);
         }
     }

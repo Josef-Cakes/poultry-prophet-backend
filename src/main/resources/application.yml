@@ -67,6 +67,9 @@ poultry:
     # Required: Base64-encoded secret of at least 256 bits (32 bytes).
     jwt-secret: ${JWT_SECRET}
     jwt-expiration-ms: ${JWT_EXPIRATION_MS:86400000}
+    # Long-lived PWA login credential. It is rotated on every refresh and is
+    # revoked by the logout endpoint. Default: 30 days.
+    refresh-token-expiration-ms: ${REFRESH_TOKEN_EXPIRATION_MS:2592000000}
     allowed-origins: ${APP_ALLOWED_ORIGINS:http://localhost:3000}
   analytics:
     weights:

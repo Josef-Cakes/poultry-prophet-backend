@@ -117,7 +117,7 @@ curl http://localhost:8080/api/health
 curl -X POST localhost:8080/api/auth/register -H "Content-Type: application/json" \
   -d '{"email":"manager@farm.test","password":"password123","fullName":"Farm Manager","role":"MANAGER"}'
 
-# 2. Login as the manager and copy the returned "token"
+# 2. Login as the manager and save both returned credentials
 curl -X POST localhost:8080/api/auth/login -H "Content-Type: application/json" \
   -d '{"email":"manager@farm.test","password":"password123"}'
 
@@ -131,6 +131,32 @@ curl -X POST localhost:8080/api/handlers \
 Send `Authorization: Bearer <token>` on all other requests. A handler created through
 `POST /api/handlers`, or a self-registered handler who accepts a farm invite, may create
 batches within that farm.
+
+### PWA session refresh
+
+Login, registration, and invite acceptance return an access `token` plus a 30-day
+`refreshToken`. The PWA should persist the refresh token in its protected client
+storage, restore it on startup, and call:
+
+```bash
+curl -X POST localhost:8080/api/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refreshToken":"<saved-refresh-token>"}'
+```
+
+The refresh response contains a new access token and a replacement refresh token. Replace
+both stored values after every successful refresh; refresh tokens are single-use and rotate
+to prevent replay. The 30-day lifetime can be changed with `REFRESH_TOKEN_EXPIRATION_MS`.
+To sign out, revoke the saved refresh token:
+
+```bash
+curl -X POST localhost:8080/api/auth/logout \
+  -H "Content-Type: application/json" \
+  -d '{"refreshToken":"<saved-refresh-token>"}'
+```
+
+If the PWA calls logout with a still-valid access token and no body, all refresh sessions for
+that user are revoked. A refresh token that is not used for 30 days requires a new login.
 
 ## API overview
 
