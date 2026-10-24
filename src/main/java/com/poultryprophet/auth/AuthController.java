@@ -3,9 +3,11 @@ package com.poultryprophet.auth;
 import com.poultryprophet.auth.dto.AuthResponse;
 import com.poultryprophet.auth.dto.LoginRequest;
 import com.poultryprophet.auth.dto.RegisterRequest;
+import com.poultryprophet.security.CustomUserDetails;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -29,5 +31,21 @@ public class AuthController {
     @PostMapping("/login")
     public ResponseEntity<AuthResponse> login(@Valid @RequestBody LoginRequest request) {
         return ResponseEntity.ok(authService.login(request));
+    }
+
+    @PostMapping("/refresh")
+    public ResponseEntity<AuthResponse> refresh(@Valid @RequestBody RefreshTokenRequest request) {
+        return ResponseEntity.ok(authService.refresh(request.refreshToken()));
+    }
+
+    @PostMapping("/logout")
+    public ResponseEntity<Void> logout(@RequestBody(required = false) RefreshTokenRequest request,
+                                       @AuthenticationPrincipal CustomUserDetails principal) {
+        if (request != null) {
+            authService.logout(request.refreshToken());
+        } else if (principal != null) {
+            authService.logoutAll(principal.getId());
+        }
+        return ResponseEntity.noContent().build();
     }
 }
