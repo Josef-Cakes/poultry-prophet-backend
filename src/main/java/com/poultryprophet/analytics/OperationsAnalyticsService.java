@@ -5,6 +5,7 @@ import com.poultryprophet.finance.FinanceService;
 import com.poultryprophet.finance.dto.FinanceSummaryResponse;
 import com.poultryprophet.incubation.IncubationCycle;
 import com.poultryprophet.incubation.IncubationCycleRepository;
+import com.poultryprophet.incubation.IncubationMetrics;
 import com.poultryprophet.incubation.IncubationStatus;
 import com.poultryprophet.input.FarmInputLog;
 import com.poultryprophet.input.FarmInputLogRepository;
@@ -42,14 +43,20 @@ public class OperationsAnalyticsService {
         LocalDate effectiveStart = start == null ? effectiveEnd.minusDays(30) : start;
         if (effectiveStart.isAfter(effectiveEnd)) throw new IllegalArgumentException("Start date cannot be after end date");
 
-        List<IncubationCycle> cycles = incubationRepository.findByFarmIdAndLoadedDateBetweenOrderByLoadedDateAsc(farmId, effectiveStart, effectiveEnd);
-        long completed = cycles.stream().filter(c -> c.getStatus() == IncubationStatus.COMPLETED).count();
-        int eggs = cycles.stream().mapToInt(IncubationCycle::getEggsLoaded).sum();
-        int hatched = cycles.stream().mapToInt(c -> c.getHatchedCount() == null ? 0 : c.getHatchedCount()).sum();
-        int unhatched = cycles.stream().mapToInt(c -> c.getUnhatchedCount() == null ? 0 : c.getUnhatchedCount()).sum();
-        int removed = cycles.stream().mapToInt(c -> c.getRemovedDamagedCount() == null ? 0 : c.getRemovedDamagedCount()).sum();
-        double duration = cycles.stream().filter(c -> c.getActualHatchDate() != null).mapToLong(c -> java.time.temporal.ChronoUnit.DAYS.between(c.getLoadedDate(), c.getActualHatchDate())).average().orElse(0);
-        IncubationAnalyticsResponse incubation = new IncubationAnalyticsResponse(effectiveStart, effectiveEnd, cycles.size(), completed, eggs, hatched, unhatched, removed, eggs == 0 ? 0 : round(hatched * 100.0 / eggs), round(duration));
+        List<IncubationCycle> loadedCycles = incubationRepository
+                .findByFarmIdAndLoadedDateBetweenOrderByLoadedDateAsc(farmId, effectiveStart, effectiveEnd);
+        List<IncubationCycle> completedCycles = incubationRepository
+                .findByFarmIdAndStatusAndActualHatchDateBetweenOrderByActualHatchDateAsc(
+                        farmId, IncubationStatus.COMPLETED, effectiveStart, effectiveEnd);
+        Map<Long, IncubationCycle> cyclesById = new LinkedHashMap<>();
+        loadedCycles.forEach(cycle -> cyclesById.put(cycle.getId(), cycle));
+        completedCycles.forEach(cycle -> cyclesById.putIfAbsent(cycle.getId(), cycle));
+        IncubationMetrics.Aggregate incubationTotals = IncubationMetrics.aggregate(completedCycles);
+        IncubationAnalyticsResponse incubation = new IncubationAnalyticsResponse(
+                effectiveStart, effectiveEnd, cyclesById.size(), completedCycles.size(),
+                incubationTotals.eggsLoaded(), incubationTotals.hatched(), incubationTotals.unhatched(),
+                incubationTotals.removedDamaged(), incubationTotals.hatchRatePercent(),
+                incubationTotals.averageDurationDays());
 
         Instant startInstant = effectiveStart.atStartOfDay(java.time.ZoneOffset.UTC).toInstant();
         Instant endInstant = effectiveEnd.plusDays(1).atStartOfDay(java.time.ZoneOffset.UTC).toInstant();

@@ -56,7 +56,7 @@ public class SyncService {
             try {
                 // Validates the batch belongs to the syncing handler's farm.
                 Batch batch = batchService.requireBatch(item.batchId(), farmId);
-                dateValidation.validate(item.recordDate(), batch.getStartDate());
+            dateValidation.validate(item.recordDate(), batch.getHatchDate());
 
                 DailyRecord existing = recordRepository
                         .findByBatchIdAndRecordDate(item.batchId(), item.recordDate())

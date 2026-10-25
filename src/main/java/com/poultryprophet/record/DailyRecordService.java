@@ -85,7 +85,7 @@ public class DailyRecordService {
                               ObservationQuality waterQuality, Instant updatedAt, SyncStatus syncStatus) {
         Batch batch = batchService.requireWritableBatch(batchId, farmId);
         LocalDate selectedDate = dateValidation.resolve(date);
-        dateValidation.validate(selectedDate, batch.getStartDate());
+        dateValidation.validate(selectedDate, batch.getHatchDate());
         DailyRecord record = recordRepository.findByBatchIdAndRecordDate(batch.getId(), selectedDate)
                 .orElseGet(DailyRecord::new);
         int canonicalHealthDeaths = mortalityAccountingService.healthDeathsForDate(batchId, selectedDate);

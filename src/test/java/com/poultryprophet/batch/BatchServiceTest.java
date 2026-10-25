@@ -6,13 +6,16 @@ import com.poultryprophet.common.BadRequestException;
 import com.poultryprophet.user.Role;
 import com.poultryprophet.user.User;
 import com.poultryprophet.user.UserRepository;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Optional;
 
@@ -38,8 +41,16 @@ class BatchServiceTest {
     @Mock
     private UserRepository userRepository;
 
-    @InjectMocks
     private BatchService batchService;
+
+    private static final Clock FIXED_CLOCK = Clock.fixed(
+            Instant.parse("2026-09-12T00:00:00Z"), ZoneId.of("Asia/Manila"));
+
+    @BeforeEach
+    void setUp() {
+        batchService = new BatchService(batchRepository, stageRepository, assignmentRepository,
+                userRepository, FIXED_CLOCK);
+    }
 
     @Test
     void rejectsCreationUntilHandlerJoinsAFarm() {
@@ -98,6 +109,24 @@ class BatchServiceTest {
         assertThatThrownBy(() -> batchService.create(request, 7L))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessage("Handler 33 belongs to a different farm");
+    }
+
+    @Test
+    void rejectsFutureHatchDateDuringCreation() {
+        CreateBatchRequest request = new CreateBatchRequest(
+                "Future flock",
+                25,
+                LocalDate.of(2026, 9, 13),
+                1L,
+                null,
+                null,
+                List.of());
+
+        assertThatThrownBy(() -> batchService.create(request, 7L))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessage("Hatch date cannot be in the future");
+
+        verifyNoInteractions(batchRepository, stageRepository, assignmentRepository, userRepository);
     }
 
     private static CreateBatchRequest request() {

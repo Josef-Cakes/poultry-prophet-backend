@@ -55,6 +55,8 @@ ALTER TABLE batch_event
     );
 CREATE INDEX IF NOT EXISTS idx_batch_event_batch_projection
     ON batch_event(batch_id, event_date, id);
+CREATE INDEX IF NOT EXISTS idx_batch_event_report_order
+    ON batch_event(batch_id, event_date DESC, created_at DESC, id DESC);
 
 -- Batch retirement compatibility. The versioned SQL file remains the reviewed
 -- migration record; these additive IF-NOT-EXISTS statements keep validation and
@@ -87,6 +89,15 @@ CREATE INDEX IF NOT EXISTS idx_batch_status_archived_at
 -- idempotent because this deployment currently uses Spring SQL initialization rather than Flyway.
 ALTER TABLE batch ADD COLUMN IF NOT EXISTS hatch_date_confirmed_at timestamptz;
 ALTER TABLE batch ADD COLUMN IF NOT EXISTS hatch_date_confirmed_by_user_id bigint;
+
+-- Hatch date drives age, lifecycle stage, and vaccine due dates. Farm entry date is kept
+-- separately. Legacy rows inherit hatch_date from start_date; unknown historical farm-entry
+-- dates remain NULL rather than being fabricated.
+ALTER TABLE batch ADD COLUMN IF NOT EXISTS hatch_date date;
+ALTER TABLE batch ADD COLUMN IF NOT EXISTS farm_entry_date date;
+UPDATE batch SET hatch_date = start_date WHERE hatch_date IS NULL;
+CREATE INDEX IF NOT EXISTS idx_batch_hatch_date ON batch(farm_id, hatch_date);
+CREATE INDEX IF NOT EXISTS idx_batch_farm_entry_date ON batch(farm_id, farm_entry_date);
 
 CREATE TABLE IF NOT EXISTS batch_sex_composition (
     id bigserial PRIMARY KEY,
@@ -188,7 +199,40 @@ ALTER TABLE handler_task ADD COLUMN IF NOT EXISTS visible_from timestamptz;
 ALTER TABLE handler_task ADD COLUMN IF NOT EXISTS source_type varchar(48);
 ALTER TABLE handler_task ADD COLUMN IF NOT EXISTS source_id bigint;
 ALTER TABLE handler_task ADD COLUMN IF NOT EXISTS completed_by bigint;
+UPDATE handler_task
+SET assignment_scope = CASE WHEN batch_id IS NULL THEN 'FARM_TEAM' ELSE 'BATCH_TEAM' END
+WHERE assigned_handler_id IS NULL
+  AND (assignment_scope IS NULL OR btrim(assignment_scope) NOT IN ('BATCH_TEAM', 'FARM_TEAM'));
+UPDATE handler_task
+SET assignment_scope = 'HANDLER'
+WHERE assigned_handler_id IS NOT NULL
+  AND (assignment_scope IS NULL OR btrim(assignment_scope) NOT IN ('HANDLER'));
+ALTER TABLE handler_task DROP CONSTRAINT IF EXISTS ck_handler_task_assignment_consistency;
+ALTER TABLE handler_task ADD CONSTRAINT ck_handler_task_assignment_consistency
+    CHECK ((assignment_scope = 'HANDLER' AND assigned_handler_id IS NOT NULL)
+        OR (assignment_scope IN ('BATCH_TEAM', 'FARM_TEAM') AND assigned_handler_id IS NULL));
 CREATE INDEX IF NOT EXISTS idx_handler_task_batch_source ON handler_task(farm_id, batch_id, source_type, source_id);
+CREATE INDEX IF NOT EXISTS idx_handler_task_farm_status_due ON handler_task(farm_id, status, due_at, id);
+CREATE INDEX IF NOT EXISTS idx_handler_task_handler_status_due ON handler_task(farm_id, assigned_handler_id, status, due_at, id);
+CREATE INDEX IF NOT EXISTS idx_handler_task_batch_status_due ON handler_task(farm_id, batch_id, status, due_at, id);
+CREATE INDEX IF NOT EXISTS idx_handler_task_team_visibility ON handler_task(farm_id, assignment_scope, visible_from, status, due_at, id);
+UPDATE handler_task t
+SET visible_from = p.remind_on::timestamp AT TIME ZONE 'Asia/Manila'
+FROM batch_vaccination_plan_item p
+WHERE t.source_type = 'VACCINATION_PLAN'
+  AND t.visible_from IS NULL
+  AND (t.source_id = p.id OR p.task_id = t.id);
+ALTER TABLE handler_task DROP CONSTRAINT IF EXISTS ck_vaccination_task_visibility;
+ALTER TABLE handler_task ADD CONSTRAINT ck_vaccination_task_visibility
+    CHECK (upper(source_type) IS DISTINCT FROM 'VACCINATION_PLAN' OR visible_from IS NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_financial_transaction_farm_date ON farm_financial_transaction(farm_id, transaction_date DESC, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_financial_transaction_farm_batch_date ON farm_financial_transaction(farm_id, batch_id, transaction_date DESC, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_farm_input_log_farm_recorded ON farm_input_log(farm_id, recorded_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_farm_input_log_farm_batch_recorded ON farm_input_log(farm_id, batch_id, recorded_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_inventory_movement_farm_occurred ON inventory_movement(farm_id, occurred_at DESC, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_inventory_movement_farm_product_occurred ON inventory_movement(farm_id, farm_product_id, occurred_at DESC, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_inventory_movement_farm_batch_occurred ON inventory_movement(farm_id, batch_id, occurred_at DESC, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_alert_batch_ack_created ON alert(batch_id, acknowledged_at, created_at DESC, id DESC);
 
 -- Inventory valuation and batch consumption-cost snapshots.
 ALTER TABLE farm_product ADD COLUMN IF NOT EXISTS average_unit_cost numeric(16,6);
@@ -219,6 +263,7 @@ ALTER TABLE inventory_movement ADD CONSTRAINT ck_inventory_movement_cost_status
     CHECK (cost_status IS NULL OR cost_status IN ('VALUED', 'UNVALUED', 'FREE'));
 ALTER TABLE farm_financial_transaction ADD COLUMN IF NOT EXISTS source_type varchar(32);
 ALTER TABLE farm_financial_transaction ADD COLUMN IF NOT EXISTS source_operation_id varchar(80);
+ALTER TABLE farm_financial_transaction ADD COLUMN IF NOT EXISTS source_event_id bigint;
 UPDATE farm_financial_transaction
 SET source_type = 'MANUAL'
 WHERE source_type IS NULL OR btrim(source_type) = '';
@@ -231,3 +276,32 @@ ALTER TABLE farm_input_log ADD COLUMN IF NOT EXISTS cost_status varchar(16);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_inventory_movement_input_log
     ON inventory_movement(farm_id, farm_input_log_id)
     WHERE farm_input_log_id IS NOT NULL;
+
+-- Offline-first field recording and atomic sale proceeds.
+ALTER TABLE batch_event ADD COLUMN IF NOT EXISTS occurred_at timestamptz;
+ALTER TABLE batch_event ADD COLUMN IF NOT EXISTS sale_amount numeric(14,2);
+ALTER TABLE batch_event ADD COLUMN IF NOT EXISTS sale_currency varchar(3);
+ALTER TABLE batch_event ADD COLUMN IF NOT EXISTS sale_buyer varchar(255);
+ALTER TABLE batch_event ADD COLUMN IF NOT EXISTS sale_reference varchar(255);
+ALTER TABLE handler_task_status_history ADD COLUMN IF NOT EXISTS previous_status varchar(32);
+ALTER TABLE handler_task_status_history ADD COLUMN IF NOT EXISTS operation_id uuid;
+ALTER TABLE handler_task_status_history ADD COLUMN IF NOT EXISTS occurred_at timestamptz;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_task_status_history_operation
+    ON handler_task_status_history(operation_id) WHERE operation_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_financial_source_operation
+    ON farm_financial_transaction(farm_id, source_operation_id)
+    WHERE source_operation_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_financial_sale_source_event
+    ON farm_financial_transaction(source_event_id)
+    WHERE source_event_id IS NOT NULL;
+ALTER TABLE batch_event DROP CONSTRAINT IF EXISTS ck_batch_event_sale_amount_positive;
+ALTER TABLE batch_event ADD CONSTRAINT ck_batch_event_sale_amount_positive
+    CHECK (sale_amount IS NULL OR sale_amount > 0);
+CREATE TABLE IF NOT EXISTS offline_sync_receipt (
+    operation_id uuid PRIMARY KEY,
+    farm_id bigint NOT NULL,
+    entity_type varchar(64) NOT NULL,
+    server_id bigint,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_offline_sync_receipt_farm ON offline_sync_receipt(farm_id, created_at);

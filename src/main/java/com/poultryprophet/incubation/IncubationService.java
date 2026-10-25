@@ -12,8 +12,9 @@ import com.poultryprophet.incubation.dto.UpdateIncubationCycleRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDate;
-import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 @Service
@@ -21,10 +22,12 @@ public class IncubationService {
 
     private final IncubationCycleRepository repository;
     private final BatchService batchService;
+    private final Clock applicationClock;
 
-    public IncubationService(IncubationCycleRepository repository, BatchService batchService) {
+    public IncubationService(IncubationCycleRepository repository, BatchService batchService, Clock applicationClock) {
         this.repository = repository;
         this.batchService = batchService;
+        this.applicationClock = applicationClock;
     }
 
     @Transactional
@@ -33,7 +36,7 @@ public class IncubationService {
         if (repository.existsByFarmIdAndCycleNameIgnoreCase(farmId, request.cycleName().trim())) {
             throw new BadRequestException("An incubation cycle with that name already exists");
         }
-        if (request.loadedDate().isAfter(LocalDate.now())) {
+        if (request.loadedDate().isAfter(today())) {
             throw new BadRequestException("Egg load date cannot be in the future");
         }
         if (request.expectedHatchDate() != null && request.expectedHatchDate().isBefore(request.loadedDate())) {
@@ -108,6 +111,13 @@ public class IncubationService {
         if (request.actualHatchDate().isBefore(cycle.getLoadedDate())) {
             throw new BadRequestException("Actual hatch date cannot be before the load date");
         }
+        if (request.actualHatchDate().isAfter(today())) {
+            throw new BadRequestException("Actual hatch date cannot be in the future");
+        }
+        if (request.hatchedCount() < 0 || request.unhatchedCount() < 0
+                || request.removedDamagedCount() < 0) {
+            throw new BadRequestException("Hatch result counts cannot be negative");
+        }
         int total = request.hatchedCount() + request.unhatchedCount() + request.removedDamagedCount();
         if (total != cycle.getEggsLoaded()) {
             throw new BadRequestException("Hatched, unhatched, and removed/damaged counts must equal eggs loaded");
@@ -119,7 +129,7 @@ public class IncubationService {
         cycle.setNotes(trimToNull(request.notes()) != null ? trimToNull(request.notes()) : cycle.getNotes());
         cycle.setStatus(IncubationStatus.COMPLETED);
         cycle.setClosedBy(userId);
-        cycle.setClosedAt(java.time.Instant.now());
+        cycle.setClosedAt(Instant.now(applicationClock));
         return IncubationCycleResponse.from(repository.save(cycle));
     }
 
@@ -131,13 +141,13 @@ public class IncubationService {
         }
         cycle.setStatus(IncubationStatus.CANCELLED);
         cycle.setClosedBy(userId);
-        cycle.setClosedAt(java.time.Instant.now());
+        cycle.setClosedAt(Instant.now(applicationClock));
         if (reason != null && !reason.isBlank()) cycle.setNotes(reason.trim());
         return IncubationCycleResponse.from(repository.save(cycle));
     }
 
     @Transactional
-    public BatchResponse createBatch(Long id, Long farmId) {
+    public BatchResponse createBatch(Long id, Long farmId, LocalDate farmEntryDate) {
         IncubationCycle cycle = require(id, farmId);
         if (cycle.getStatus() != IncubationStatus.COMPLETED || cycle.getHatchedCount() == null
                 || cycle.getActualHatchDate() == null) {
@@ -146,23 +156,32 @@ public class IncubationService {
         if (cycle.getCreatedBatchId() != null) {
             return batchService.getForFarm(cycle.getCreatedBatchId(), farmId);
         }
+        if (farmEntryDate == null || farmEntryDate.isBefore(cycle.getActualHatchDate())) {
+            throw new BadRequestException("Farm entry date cannot be before the actual hatch date");
+        }
+        if (farmEntryDate.isAfter(today())) {
+            throw new BadRequestException("Farm entry date cannot be in the future");
+        }
         String batchName = cycle.getCycleName() + " Hatch";
         CreateBatchRequest request = new CreateBatchRequest(batchName, cycle.getHatchedCount(),
-                cycle.getActualHatchDate(), null, cycle.getBloodline(), "INCUBATION:" + cycle.getCycleName(), List.of());
+                farmEntryDate, null, cycle.getBloodline(), "INCUBATION:" + cycle.getCycleName(), List.of(),
+                cycle.getActualHatchDate(), farmEntryDate);
         BatchResponse batch = batchService.create(request, farmId);
         cycle.setCreatedBatchId(batch.id());
         repository.save(cycle);
         return batch;
     }
 
-    public double hatchRate(IncubationCycle c) {
-        return c.getEggsLoaded() == 0 || c.getHatchedCount() == null ? 0.0
-                : round(c.getHatchedCount() * 100.0 / c.getEggsLoaded());
+    public Double hatchRate(IncubationCycle c) {
+        return IncubationMetrics.hatchRatePercent(c);
     }
 
-    public long durationDays(IncubationCycle c) {
-        return c.getActualHatchDate() == null ? 0
-                : ChronoUnit.DAYS.between(c.getLoadedDate(), c.getActualHatchDate());
+    public Long durationDays(IncubationCycle c) {
+        return IncubationMetrics.durationDays(c);
+    }
+
+    private LocalDate today() {
+        return LocalDate.now(applicationClock);
     }
 
     private void requireFarm(Long farmId) {
@@ -174,7 +193,4 @@ public class IncubationService {
         return value.trim();
     }
 
-    private double round(double value) {
-        return Math.round(value * 10.0) / 10.0;
-    }
 }

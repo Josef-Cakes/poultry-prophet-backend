@@ -73,6 +73,7 @@ public class MortalityAccountingService {
     public MortalityAccountingResult recordPopulationEvent(Long batchId, Long farmId, Long handlerId,
                                                             CreateBatchEventRequest request) {
         EventType type = normalize(request.eventType());
+        validateSalePayload(type, request.saleDetails());
         LocalDate date = dateValidation.resolve(request.eventDate());
         Batch batch = batchService.requireBatchForUpdate(batchId, farmId);
         batchService.ensureWritable(batch);
@@ -96,6 +97,8 @@ public class MortalityAccountingService {
                         || !java.util.Objects.equals(existing.getMaleDelta(), maleDelta(request))
                         || !java.util.Objects.equals(existing.getFemaleDelta(), femaleDelta(request))
                         || !java.util.Objects.equals(existing.getUnclassifiedDelta(), unclassifiedDelta(request))
+                        || !java.util.Objects.equals(existing.getOccurredAt(), request.occurredAt())
+                        || !sameSale(existing, request.saleDetails())
                         || (existing.getTitle() != null && !java.util.Objects.equals(existing.getTitle(), request.title()))
                         || (existing.getDetails() != null && !java.util.Objects.equals(existing.getDetails(), request.details()))
                         || (existing.getTags() != null && !java.util.Objects.equals(existing.getTags(), request.tags()))) {
@@ -123,6 +126,8 @@ public class MortalityAccountingService {
         event.setTitle(request.title());
         event.setDetails(request.details());
         event.setTags(request.tags());
+        event.setOccurredAt(request.occurredAt());
+        applySaleDetails(event, request.saleDetails());
 
         validateChronologicalProjection(batch, date, event);
 
@@ -139,7 +144,7 @@ public class MortalityAccountingService {
         Batch batch = batchService.requireBatchForUpdate(batchId, farmId);
         batchService.ensureWritable(batch);
         LocalDate selectedDate = dateValidation.resolve(date);
-        dateValidation.validate(selectedDate, batch.getStartDate());
+        dateValidation.validate(selectedDate, batch.getHatchDate());
         DailyRecord existingRecord = recordRepository.findByBatchIdAndRecordDate(batchId, selectedDate)
                 .orElse(null);
         int eventTotal = healthDeathsForDate(batchId, selectedDate);
@@ -216,7 +221,7 @@ public class MortalityAccountingService {
     }
 
     private void validate(Batch batch, LocalDate date, int affectedCount, int delta, EventType type) {
-        dateValidation.validate(date, batch.getStartDate());
+        dateValidation.validate(date, batch.getHatchDate());
         if (affectedCount < 1 && type != EventType.COUNT_CORRECTION) {
             throw new BadRequestException("Population event count must be at least 1");
         }
@@ -244,7 +249,7 @@ public class MortalityAccountingService {
         if (projectionEnd == null || projectionEnd.isBefore(date)) projectionEnd = date;
         List<BatchEvent> existing = eventRepository
                 .findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(
-                        batch.getId(), batch.getStartDate(), projectionEnd);
+                        batch.getId(), batch.getHatchDate(), projectionEnd);
         PopulationProjection existingProjection = populationProjectionService.project(
                 batch, existing, projectionEnd, ZoneId.of("Asia/Manila"));
         if (existingProjection.reconciliationRequired()) {
@@ -283,8 +288,44 @@ public class MortalityAccountingService {
         event.setDetails(request.details());
         event.setTags(request.tags());
         event.setSalePurpose(SalePurposeParser.parse(request.eventType(), request.tags()));
+        event.setOccurredAt(request.occurredAt());
+        applySaleDetails(event, request.saleDetails());
         return event;
     }
+
+    private boolean sameSale(BatchEvent existing, CreateBatchEventRequest.SaleDetails sale) {
+        if (sale == null) return existing.getSaleAmount() == null;
+        return java.util.Objects.equals(existing.getSaleAmount(), sale.amount())
+                && java.util.Objects.equals(existing.getSaleCurrency(), normalizedCurrency(sale.currency()))
+                && java.util.Objects.equals(existing.getSaleBuyer(), trim(sale.buyer()))
+                && java.util.Objects.equals(existing.getSaleReference(), trim(sale.reference()));
+    }
+
+    private void applySaleDetails(BatchEvent event, CreateBatchEventRequest.SaleDetails sale) {
+        if (sale == null) return;
+        if (sale.amount() != null && sale.amount().signum() <= 0) {
+            throw new BadRequestException("Sale amount must be greater than zero");
+        }
+        event.setSaleAmount(sale.amount());
+        event.setSaleCurrency(normalizedCurrency(sale.currency()));
+        event.setSaleBuyer(trim(sale.buyer()));
+        event.setSaleReference(trim(sale.reference()));
+    }
+
+    private void validateSalePayload(EventType type, CreateBatchEventRequest.SaleDetails sale) {
+        if (type == EventType.SALE && (sale == null || sale.amount() == null || sale.amount().signum() <= 0)) {
+            throw new BadRequestException("A total sale amount greater than zero is required for a sale event");
+        }
+        if (type != EventType.SALE && sale != null) {
+            throw new BadRequestException("Sale details are only valid for sale events");
+        }
+    }
+
+    private String normalizedCurrency(String value) {
+        return value == null || value.isBlank() ? "PHP" : value.trim().toUpperCase(java.util.Locale.ROOT);
+    }
+
+    private String trim(String value) { return value == null || value.isBlank() ? null : value.trim(); }
 
     private void applySexAllocation(Batch batch, Long farmId, LocalDate date, EventType type, int populationDelta,
                                     CreateBatchEventRequest request, BatchEvent event) {

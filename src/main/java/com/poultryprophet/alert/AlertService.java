@@ -8,7 +8,9 @@ import com.poultryprophet.batch.Batch;
 import com.poultryprophet.batch.BatchRepository;
 import com.poultryprophet.batch.BatchStatus;
 import com.poultryprophet.batch.BatchService;
+import com.poultryprophet.common.BadRequestException;
 import com.poultryprophet.common.NotFoundException;
+import com.poultryprophet.common.PageResponse;
 import com.poultryprophet.common.QueryLimits;
 import com.poultryprophet.event.BatchEvent;
 import com.poultryprophet.event.BatchEventRepository;
@@ -21,11 +23,17 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
+import java.util.LinkedHashMap;
+import java.util.ArrayList;
 
 /**
  * SDD 2.3: evaluates computed indicators against thresholds, classifies severity, persists
@@ -203,6 +211,80 @@ public class AlertService {
                 ? alertRepository.findByBatch_FarmIdAndAcknowledgedAtIsNullOrderByCreatedAtDesc(farmId, page)
                 : alertRepository.findByBatch_FarmIdOrderByCreatedAtDesc(farmId, page);
         return alerts.stream().filter(alert -> !isLegacyScoreAlert(alert)).map(AlertResponse::from).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public PageResponse<AlertResponse> pageForFarm(Long farmId, boolean activeOnly, Severity severity,
+                                                    Long batchId, String sort, int page, int size) {
+        int safePage = Math.max(0, page);
+        int safeSize = Math.max(1, Math.min(size, 50));
+        String requestedSort = sort == null || sort.isBlank() ? "priority" : sort.trim().toLowerCase(java.util.Locale.ROOT);
+        if (!requestedSort.equals("priority") && !requestedSort.equals("newest")) {
+            throw new BadRequestException("Alert sort must be priority or newest");
+        }
+
+        Specification<Alert> specification = alertSpecification(farmId, activeOnly, severity, batchId);
+        PageRequest pageRequest;
+        if (requestedSort.equals("priority")) {
+            /*
+             * JpaSort.unsafe is intended for string-based @Query sorting. This
+             * repository call uses Criteria queries, where Spring Data resolves
+             * every sort property as an Alert field and rejects a raw CASE
+             * expression. Put the CASE expression in the Criteria query itself,
+             * and do not apply it to the count query used by pagination.
+             */
+            specification = specification.and((root, query, cb) -> {
+                if (!isCountQuery(query)) {
+                    var priority = cb.<Integer>selectCase()
+                            .when(cb.equal(root.get("severity"), Severity.CRITICAL), 0)
+                            .when(cb.equal(root.get("severity"), Severity.WARNING), 1)
+                            .otherwise(2);
+                    query.orderBy(cb.asc(priority), cb.desc(root.get("createdAt")), cb.desc(root.get("id")));
+                }
+                return cb.conjunction();
+            });
+            pageRequest = PageRequest.of(safePage, safeSize, Sort.unsorted());
+        } else {
+            pageRequest = PageRequest.of(safePage, safeSize,
+                    Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id")));
+        }
+
+        Page<Alert> result = alertRepository.findAll(specification, pageRequest);
+        return PageResponse.from(result, AlertResponse::from);
+    }
+
+    @Transactional(readOnly = true)
+    public AlertSummaryResponse summaryForFarm(Long farmId) {
+        long active = countByFarm(farmId, null);
+        Map<Severity, Long> counts = new LinkedHashMap<>();
+        for (Severity value : Severity.values()) counts.put(value, countByFarm(farmId, value));
+        return new AlertSummaryResponse(active, counts.getOrDefault(Severity.CRITICAL, 0L),
+                counts.getOrDefault(Severity.WARNING, 0L), counts.getOrDefault(Severity.INFO, 0L));
+    }
+
+    private long countByFarm(Long farmId, Severity severity) {
+        return alertRepository.count(alertSpecification(farmId, true, severity, null));
+    }
+
+    private Specification<Alert> alertSpecification(Long farmId, boolean activeOnly, Severity severity,
+                                                      Long batchId) {
+        return (root, query, cb) -> {
+            List<jakarta.persistence.criteria.Predicate> predicates = new ArrayList<>();
+            predicates.add(cb.equal(root.join("batch").get("farmId"), farmId));
+            jakarta.persistence.criteria.Expression<String> indicatorType = root.get("indicatorType");
+            predicates.add(cb.or(
+                    cb.isNull(indicatorType),
+                    cb.not(indicatorType.in("BHI", "BSI", "WFR", "CRS"))));
+            if (activeOnly) predicates.add(cb.isNull(root.get("acknowledgedAt")));
+            if (severity != null) predicates.add(cb.equal(root.get("severity"), severity));
+            if (batchId != null) predicates.add(cb.equal(root.get("batch").get("id"), batchId));
+            return cb.and(predicates.toArray(jakarta.persistence.criteria.Predicate[]::new));
+        };
+    }
+
+    private boolean isCountQuery(jakarta.persistence.criteria.CriteriaQuery<?> query) {
+        Class<?> resultType = query.getResultType();
+        return Long.class.equals(resultType) || long.class.equals(resultType);
     }
 
     @Transactional

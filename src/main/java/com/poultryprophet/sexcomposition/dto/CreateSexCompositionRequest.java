@@ -12,5 +12,6 @@ public record CreateSexCompositionRequest(
         @NotNull @Min(0) Integer unclassifiedCount,
         String revisionReason,
         String notes,
-        UUID operationId
+        UUID operationId,
+        Long expectedCurrentRecordId
 ) {}

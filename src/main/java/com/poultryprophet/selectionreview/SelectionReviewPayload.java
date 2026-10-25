@@ -113,6 +113,9 @@ public record SelectionReviewPayload(
             LocalDate startDate,
             LocalDate endDate,
             BigDecimal recordedIncome,
+            BigDecimal saleIncome,
+            BigDecimal otherIncome,
+            long saleTransactionCount,
             BigDecimal recordedExpense,
             BigDecimal recordedNetCashFlow,
             BigDecimal productsConsumedCost,
@@ -121,7 +124,18 @@ public record SelectionReviewPayload(
             long postedTransactionCount,
             boolean recordsMayBeIncomplete,
             String limitation
-    ) {}
+    ) {
+        /** Compatibility constructor for saved snapshots created before the sale breakdown. */
+        public FinanceSummary(LocalDate startDate, LocalDate endDate, BigDecimal recordedIncome,
+                              BigDecimal recordedExpense, BigDecimal recordedNetCashFlow,
+                              BigDecimal productsConsumedCost, BigDecimal totalRecordedBatchCost,
+                              BigDecimal recordedContribution, long postedTransactionCount,
+                              boolean recordsMayBeIncomplete, String limitation) {
+            this(startDate, endDate, recordedIncome, BigDecimal.ZERO, recordedIncome, 0L,
+                    recordedExpense, recordedNetCashFlow, productsConsumedCost, totalRecordedBatchCost,
+                    recordedContribution, postedTransactionCount, recordsMayBeIncomplete, limitation);
+        }
+    }
 
     public record DataAvailabilityItem(
             String section,

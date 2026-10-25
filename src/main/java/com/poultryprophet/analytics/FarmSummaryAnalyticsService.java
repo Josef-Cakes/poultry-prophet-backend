@@ -7,12 +7,11 @@ import com.poultryprophet.batch.BatchStatus;
 import com.poultryprophet.event.BatchEvent;
 import com.poultryprophet.event.BatchEventRepository;
 import com.poultryprophet.event.EventType;
-import com.poultryprophet.finance.FinanceTransactionStatus;
-import com.poultryprophet.finance.FinanceTransactionType;
-import com.poultryprophet.finance.FinancialTransaction;
-import com.poultryprophet.finance.FinancialTransactionRepository;
+import com.poultryprophet.finance.FinanceService;
+import com.poultryprophet.finance.dto.FinanceAnalyticsResponse;
 import com.poultryprophet.incubation.IncubationCycle;
 import com.poultryprophet.incubation.IncubationCycleRepository;
+import com.poultryprophet.incubation.IncubationMetrics;
 import com.poultryprophet.incubation.IncubationStatus;
 import com.poultryprophet.input.FarmInputLog;
 import com.poultryprophet.input.FarmInputLogRepository;
@@ -32,8 +31,6 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -49,7 +46,7 @@ public class FarmSummaryAnalyticsService {
 
     private final BatchRepository batchRepository;
     private final BatchEventRepository eventRepository;
-    private final FinancialTransactionRepository financeRepository;
+    private final FinanceService financeService;
     private final HandlerTaskRepository taskRepository;
     private final IncubationCycleRepository incubationRepository;
     private final FarmInputLogRepository inputRepository;
@@ -58,7 +55,7 @@ public class FarmSummaryAnalyticsService {
 
     public FarmSummaryAnalyticsService(BatchRepository batchRepository,
                                         BatchEventRepository eventRepository,
-                                        FinancialTransactionRepository financeRepository,
+                                        FinanceService financeService,
                                         HandlerTaskRepository taskRepository,
                                         IncubationCycleRepository incubationRepository,
                                         FarmInputLogRepository inputRepository,
@@ -66,7 +63,7 @@ public class FarmSummaryAnalyticsService {
                                         @Value("${app.time-zone:Asia/Manila}") String timeZone) {
         this.batchRepository = batchRepository;
         this.eventRepository = eventRepository;
-        this.financeRepository = financeRepository;
+        this.financeService = financeService;
         this.taskRepository = taskRepository;
         this.incubationRepository = incubationRepository;
         this.inputRepository = inputRepository;
@@ -80,7 +77,8 @@ public class FarmSummaryAnalyticsService {
                                                    LocalDate requestedEnd, String requestedOrigin,
                                                    String testRunId) {
         if (farmId == null) throw new IllegalArgumentException("Join a farm before viewing the farm summary");
-        LocalDate end = requestedEnd == null ? LocalDate.now(farmZone) : requestedEnd;
+        LocalDate today = LocalDate.now(farmZone);
+        LocalDate end = requestedEnd == null ? today : requestedEnd;
         LocalDate start = requestedStart == null ? end.minusDays(29) : requestedStart;
         if (start.isAfter(end)) throw new IllegalArgumentException("Start date cannot be after end date");
 
@@ -106,12 +104,12 @@ public class FarmSummaryAnalyticsService {
         Set<Long> batchIds = scopedBatches.stream().map(Batch::getId).collect(Collectors.toSet());
         long activeBatches = scopedBatches.stream().filter(batch -> batch.getStatus() == BatchStatus.ACTIVE).count();
         long initialPopulation = scopedBatches.stream().mapToLong(Batch::getInitialPopulation).sum();
-        LocalDate populationAsOf = LocalDate.now(farmZone);
+        LocalDate populationAsOf = end.isAfter(today) ? today : end;
         List<String> populationLimitations = new ArrayList<>();
         long currentPopulation = scopedBatches.stream().mapToLong(batch -> {
             List<BatchEvent> ledgerEvents = eventRepository
                     .findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(
-                            batch.getId(), batch.getStartDate(), populationAsOf);
+                            batch.getId(), batch.getHatchDate(), populationAsOf);
             PopulationProjection projection = populationProjectionService.project(
                     batch, ledgerEvents, populationAsOf, farmZone);
             if (projection.reconciliationRequired()) {
@@ -121,7 +119,8 @@ public class FarmSummaryAnalyticsService {
             return projection.validPopulation() == null ? projection.boundedPopulation() : projection.validPopulation();
         }).sum();
         FarmSummaryAnalyticsResponse.PopulationSummary population =
-                new FarmSummaryAnalyticsResponse.PopulationSummary(activeBatches, initialPopulation, currentPopulation, !scopedBatches.isEmpty());
+                new FarmSummaryAnalyticsResponse.PopulationSummary(activeBatches, initialPopulation, currentPopulation,
+                        populationAsOf, !scopedBatches.isEmpty());
 
         List<BatchEvent> events = new ArrayList<>();
         for (Long id : batchIds) {
@@ -133,20 +132,26 @@ public class FarmSummaryAnalyticsService {
         Map<String, Long> inputTypes = inputs.stream().collect(Collectors.groupingBy(
                 input -> input.getProductType().name(), LinkedHashMap::new, Collectors.counting()));
 
-        List<FinancialTransaction> finance = financeRepository.findByFarmIdAndTransactionDateBetweenOrderByTransactionDateAsc(farmId, start, end)
-                .stream().filter(tx -> scopeMatches(tx.getBatchId(), batchIds, farmWide)).toList();
         List<HandlerTask> taskRecords = taskRepository.findByFarmIdOrderByDueAtAscCreatedAtDesc(farmId).stream()
                 .filter(task -> scopeMatches(task.getBatchId(), batchIds, farmWide)).filter(task -> overlaps(task, start, end)).toList();
-        List<IncubationCycle> cycles = incubationRepository.findByFarmIdAndLoadedDateBetweenOrderByLoadedDateAsc(farmId, start, end).stream()
+        List<IncubationCycle> loadedCycles = incubationRepository.findByFarmIdAndLoadedDateBetweenOrderByLoadedDateAsc(farmId, start, end).stream()
+                .filter(cycle -> scopeMatches(cycle.getCreatedBatchId(), batchIds, farmWide))
+                .filter(cycle -> originMatches(cycle.getNotes(), origin, testRunId)).toList();
+        List<IncubationCycle> completedCycles = incubationRepository
+                .findByFarmIdAndStatusAndActualHatchDateBetweenOrderByActualHatchDateAsc(
+                        farmId, IncubationStatus.COMPLETED, start, end).stream()
                 .filter(cycle -> scopeMatches(cycle.getCreatedBatchId(), batchIds, farmWide))
                 .filter(cycle -> originMatches(cycle.getNotes(), origin, testRunId)).toList();
 
-        FarmSummaryAnalyticsResponse.FinanceSummary financeSummary = finance(finance, start, end, farmWide);
+        FinanceAnalyticsResponse financeAnalytics = batchId == null
+                ? financeService.analyticsForFarmScope(farmId, batchIds, start, end)
+                : financeService.analytics(farmId, batchId, start, end);
+        FarmSummaryAnalyticsResponse.FinanceSummary financeSummary = financeSummary(financeAnalytics);
         List<String> limitations = new ArrayList<>();
         limitations.addAll(populationLimitations);
         if (scopedBatches.isEmpty()) limitations.add("No batches match this view.");
         if (batchId != null && financeSummary.available()) limitations.add(financeSummary.limitation());
-        if (!cycles.isEmpty() && cycles.stream().anyMatch(cycle -> cycle.getStatus() != IncubationStatus.COMPLETED)) {
+        if (!loadedCycles.isEmpty() && loadedCycles.stream().anyMatch(cycle -> cycle.getStatus() != IncubationStatus.COMPLETED)) {
             limitations.add("In-progress incubation cycles are excluded from the finalized hatch rate.");
         }
         if (inputs.isEmpty()) limitations.add("No feed, vitamin, medicine, or vaccine records in this period.");
@@ -154,7 +159,7 @@ public class FarmSummaryAnalyticsService {
 
         return new FarmSummaryAnalyticsResponse(scope, batchId, batchName, start, end, farmZone.getId(), Instant.now(),
                 population, eventSummary(events), activity(events, start, end), financeSummary,
-                tasks(taskRecords), incubation(cycles), inputTypes, limitations);
+                tasks(taskRecords), incubation(loadedCycles, completedCycles), inputTypes, limitations);
     }
 
     private Predicate<Batch> batchOriginFilter(String origin, String testRunId) {
@@ -233,55 +238,26 @@ public class FarmSummaryAnalyticsService {
         }).toList();
     }
 
-    private FarmSummaryAnalyticsResponse.FinanceSummary finance(List<FinancialTransaction> values,
-                                                                  LocalDate start, LocalDate end, boolean farmScope) {
-        Map<LocalDate, MoneyCounter> buckets = new HashMap<>();
-        Map<String, BigDecimal> categories = new HashMap<>();
-        BigDecimal income = BigDecimal.ZERO;
-        BigDecimal expense = BigDecimal.ZERO;
-        long posted = 0;
-        for (FinancialTransaction tx : values) {
-            if (tx.getStatus() != FinanceTransactionStatus.POSTED) continue;
-            posted++;
-            if (tx.getType() == FinanceTransactionType.INCOME) income = income.add(tx.getAmount());
-            else {
-                expense = expense.add(tx.getAmount());
-                categories.merge(tx.getCategory(), tx.getAmount(), BigDecimal::add);
-            }
-            LocalDate bucket = bucketStart(tx.getTransactionDate(), start, end);
-            MoneyCounter counter = buckets.computeIfAbsent(bucket, ignored -> new MoneyCounter());
-            if (tx.getType() == FinanceTransactionType.INCOME) counter.income = counter.income.add(tx.getAmount());
-            else counter.expense = counter.expense.add(tx.getAmount());
-        }
-        List<FarmSummaryAnalyticsResponse.CashFlowBucket> series = buckets.entrySet().stream()
-                .sorted(Map.Entry.comparingByKey()).map(entry -> {
-                    MoneyCounter c = entry.getValue();
-                    LocalDate periodEnd = bucketEnd(entry.getKey(), start, end);
-                    return new FarmSummaryAnalyticsResponse.CashFlowBucket(entry.getKey(), periodEnd,
-                            entry.getKey().format(DateTimeFormatter.ofPattern("MMM d")), money(c.income),
-                            money(c.expense), money(c.income.subtract(c.expense)));
-                }).toList();
-        List<FarmSummaryAnalyticsResponse.CategoryTotal> categoryTotals = categories.entrySet().stream()
-                .sorted(Map.Entry.<String, BigDecimal>comparingByValue(Comparator.reverseOrder())).limit(8)
-                .map(entry -> new FarmSummaryAnalyticsResponse.CategoryTotal(entry.getKey(), money(entry.getValue()))).toList();
-        String currency = values.stream().map(FinancialTransaction::getCurrency).filter(Objects::nonNull).findFirst().orElse("PHP");
-        String limitation = farmScope ? "Farm view includes batch-linked and farm-wide records."
-                : "Batch view includes only transactions linked to this batch; farm-wide costs are excluded.";
-        return new FarmSummaryAnalyticsResponse.FinanceSummary(currency, money(income), money(expense),
-                money(income.subtract(expense)), posted, series, categoryTotals, posted > 0, limitation);
+    private FarmSummaryAnalyticsResponse.FinanceSummary financeSummary(FinanceAnalyticsResponse source) {
+        FinanceAnalyticsResponse.Totals totals = source.totals();
+        List<FarmSummaryAnalyticsResponse.CashFlowBucket> series = source.series().stream()
+                .map(point -> new FarmSummaryAnalyticsResponse.CashFlowBucket(
+                        point.periodStart(), point.periodEnd(), point.label(), number(point.income()),
+                        number(point.expense()), number(point.netChange())))
+                .toList();
+        List<FarmSummaryAnalyticsResponse.CategoryTotal> categories = source.categoryTotals().stream()
+                .map(category -> new FarmSummaryAnalyticsResponse.CategoryTotal(
+                        category.category(), number(category.amount())))
+                .toList();
+        return new FarmSummaryAnalyticsResponse.FinanceSummary(
+                source.currency(), number(totals.recordedIncome()), number(totals.saleIncome()),
+                totals.saleTransactionCount(), number(totals.recordedExpense()),
+                number(totals.recordedNetCashFlow()), totals.postedTransactionCount(), series,
+                categories, totals.postedTransactionCount() > 0, source.limitations().message());
     }
 
-    private LocalDate bucketStart(LocalDate date, LocalDate start, LocalDate end) {
-        long span = ChronoUnit.DAYS.between(start, end) + 1;
-        if (span <= 31) return date;
-        if (span <= 180) return date.with(java.time.DayOfWeek.MONDAY);
-        return date.withDayOfMonth(1);
-    }
-
-    private LocalDate bucketEnd(LocalDate bucket, LocalDate start, LocalDate end) {
-        long span = ChronoUnit.DAYS.between(start, end) + 1;
-        LocalDate result = span <= 31 ? bucket : span <= 180 ? bucket.plusDays(6) : bucket.plusMonths(1).minusDays(1);
-        return result.isAfter(end) ? end : result;
+    private String number(BigDecimal value) {
+        return value == null ? "0.00" : value.setScale(2, java.math.RoundingMode.HALF_UP).toPlainString();
     }
 
     private FarmSummaryAnalyticsResponse.TaskSummary tasks(List<HandlerTask> tasks) {
@@ -301,15 +277,18 @@ public class FarmSummaryAnalyticsService {
         return !due.isBefore(start) && !created.isAfter(end);
     }
 
-    private FarmSummaryAnalyticsResponse.IncubationSummary incubation(List<IncubationCycle> cycles) {
-        List<IncubationCycle> completed = cycles.stream().filter(cycle -> cycle.getStatus() == IncubationStatus.COMPLETED).toList();
-        int eggs = completed.stream().mapToInt(IncubationCycle::getEggsLoaded).sum();
-        int hatched = completed.stream().mapToInt(cycle -> cycle.getHatchedCount() == null ? 0 : cycle.getHatchedCount()).sum();
-        double duration = completed.stream().filter(cycle -> cycle.getActualHatchDate() != null)
-                .mapToLong(cycle -> ChronoUnit.DAYS.between(cycle.getLoadedDate(), cycle.getActualHatchDate())).average().orElse(0);
-        long inProgress = cycles.stream().filter(cycle -> cycle.getStatus() != IncubationStatus.COMPLETED && cycle.getStatus() != IncubationStatus.CANCELLED).count();
-        return new FarmSummaryAnalyticsResponse.IncubationSummary(cycles.size(), completed.size(), inProgress,
-                eggs, hatched, eggs == 0 ? 0 : round(hatched * 100.0 / eggs), round(duration), !cycles.isEmpty());
+    private FarmSummaryAnalyticsResponse.IncubationSummary incubation(List<IncubationCycle> loadedCycles,
+                                                                       List<IncubationCycle> completedCycles) {
+        Map<Long, IncubationCycle> cyclesById = new LinkedHashMap<>();
+        loadedCycles.forEach(cycle -> cyclesById.put(cycle.getId(), cycle));
+        completedCycles.forEach(cycle -> cyclesById.putIfAbsent(cycle.getId(), cycle));
+        IncubationMetrics.Aggregate totals = IncubationMetrics.aggregate(completedCycles);
+        long inProgress = cyclesById.values().stream()
+                .filter(cycle -> cycle.getStatus() != IncubationStatus.COMPLETED
+                        && cycle.getStatus() != IncubationStatus.CANCELLED).count();
+        return new FarmSummaryAnalyticsResponse.IncubationSummary(cyclesById.size(), completedCycles.size(), inProgress,
+                totals.eggsLoaded(), totals.hatched(), totals.hatchRatePercent(), totals.averageDurationDays(),
+                !cyclesById.isEmpty());
     }
 
     private String money(BigDecimal value) {
@@ -326,8 +305,4 @@ public class FarmSummaryAnalyticsService {
         long otherEvents;
     }
 
-    private static final class MoneyCounter {
-        BigDecimal income = BigDecimal.ZERO;
-        BigDecimal expense = BigDecimal.ZERO;
-    }
 }

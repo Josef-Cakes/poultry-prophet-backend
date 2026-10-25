@@ -19,6 +19,7 @@ import com.poultryprophet.finance.FinancialTransaction;
 import com.poultryprophet.finance.FinancialTransactionRepository;
 import com.poultryprophet.incubation.IncubationCycle;
 import com.poultryprophet.incubation.IncubationCycleRepository;
+import com.poultryprophet.incubation.IncubationMetrics;
 import com.poultryprophet.input.FarmInputLog;
 import com.poultryprophet.input.FarmInputLogRepository;
 import com.poultryprophet.inventory.InventoryMovement;
@@ -231,11 +232,11 @@ public class SelectionReviewService {
                                              boolean includeFinance) {
         List<BatchEvent> events = eventRepository
                 .findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(batch.getId(), periodStart, periodEnd);
-        List<BatchEvent> eventsThroughAsOf = periodStart.equals(batch.getStartDate())
+        List<BatchEvent> eventsThroughAsOf = periodStart.equals(batch.getHatchDate())
                 && periodEnd.equals(asOfDate)
                 ? events
                 : eventRepository.findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(
-                        batch.getId(), batch.getStartDate(), asOfDate);
+                        batch.getId(), batch.getHatchDate(), asOfDate);
         List<FarmInputLog> products = inputRepository.findByFarmIdAndBatchIdOrderByRecordedAtDesc(farmId, batch.getId())
                 .stream().filter(value -> within(value.getRecordedAt(), periodStart, periodEnd)).toList();
         Map<Long, InventoryMovement> productMovements = inventoryMovementRepository == null ? Map.of()
@@ -343,8 +344,8 @@ public class SelectionReviewService {
         SelectionReviewPayload.BatchOverview overview = new SelectionReviewPayload.BatchOverview(
                 batch.getId(), batch.getName(), batch.getBloodline(), batch.getSource(), batch.getInitialPopulation(),
                 population.currentPopulation(), population.currentPopulation() + " / " + batch.getInitialPopulation(),
-                Math.max(1, ChronoUnit.DAYS.between(batch.getStartDate(), asOfDate) + 1), stage.stage().getName(),
-                batch.getStartDate(), latestEventDate);
+                Math.max(1, ChronoUnit.DAYS.between(batch.getHatchDate(), asOfDate) + 1), stage.stage().getName(),
+                batch.getHatchDate(), latestEventDate);
 
         return new SelectionReviewPayload(
                 "Batch Selection Review Report",
@@ -449,10 +450,11 @@ public class SelectionReviewService {
     }
 
     private SelectionReviewPayload.IncubationSummary incubationSummary(IncubationCycle cycle) {
-        Double hatchRate = cycle.getEggsLoaded() == 0 || cycle.getHatchedCount() == null ? null
-                : round(cycle.getHatchedCount() * 100.0 / cycle.getEggsLoaded(), 2);
-        String limitation = cycle.getHatchedCount() == null
-                ? "Hatched count has not been recorded."
+        Double hatchRate = IncubationMetrics.hatchRatePercent(cycle);
+        String limitation = hatchRate == null
+                ? cycle.getStatus() == com.poultryprophet.incubation.IncubationStatus.CANCELLED
+                    ? "This incubation cycle was cancelled."
+                    : "Hatch results have not been finalized."
                 : "Hatch rate is hatched eggs divided by eggs loaded; it is not a fertility diagnosis.";
         return new SelectionReviewPayload.IncubationSummary(
                 cycle.getId(), cycle.getCycleName(), cycle.getIncubatorCode(), cycle.getLoadedDate(),
@@ -468,6 +470,14 @@ public class SelectionReviewService {
                 .filter(value -> value.getStatus() == FinanceTransactionStatus.POSTED).toList();
         BigDecimal income = posted.stream().filter(value -> value.getType() == FinanceTransactionType.INCOME)
                 .map(FinancialTransaction::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal saleIncome = posted.stream()
+                .filter(value -> value.getType() == FinanceTransactionType.INCOME)
+                .filter(value -> "SALE_EVENT".equalsIgnoreCase(value.getSourceType()))
+                .map(FinancialTransaction::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
+        long saleTransactionCount = posted.stream()
+                .filter(value -> value.getType() == FinanceTransactionType.INCOME)
+                .filter(value -> "SALE_EVENT".equalsIgnoreCase(value.getSourceType()))
+                .count();
         BigDecimal expense = posted.stream().filter(value -> value.getType() == FinanceTransactionType.EXPENSE)
                 .filter(value -> !"INVENTORY_PURCHASE".equalsIgnoreCase(value.getSourceType()))
                 .map(FinancialTransaction::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
@@ -483,7 +493,8 @@ public class SelectionReviewService {
             }
         }
         BigDecimal totalBatchCost = expense.add(productsConsumed);
-        return new SelectionReviewPayload.FinanceSummary(start, end, income, expense, income.subtract(expense),
+        return new SelectionReviewPayload.FinanceSummary(start, end, income, saleIncome,
+                income.subtract(saleIncome), saleTransactionCount, expense, income.subtract(expense),
                 productsConsumed, totalBatchCost, income.subtract(totalBatchCost), posted.size(), !complete,
                 "Recorded cash flow and consumed inventory cost are shown separately; totals may omit unentered records.");
     }
@@ -509,7 +520,7 @@ public class SelectionReviewService {
     private Dates normalizeDates(Batch batch, LocalDate requestedStart, LocalDate requestedEnd, LocalDate requestedAsOf) {
         LocalDate today = LocalDate.now(farmZone());
         LocalDate end = requestedEnd == null ? today : requestedEnd;
-        LocalDate start = requestedStart == null ? batch.getStartDate() : requestedStart;
+        LocalDate start = requestedStart == null ? batch.getHatchDate() : requestedStart;
         LocalDate asOf = requestedAsOf == null ? end : requestedAsOf;
         if (start.isAfter(end)) throw new BadRequestException("periodStart must not be after periodEnd");
         if (asOf.isBefore(start) || asOf.isAfter(end)) throw new BadRequestException("asOfDate must be within the report period");
@@ -629,7 +640,7 @@ public class SelectionReviewService {
         SelectionReviewPayload.BatchOverview safeBatch = new SelectionReviewPayload.BatchOverview(
                 batch.batchId(), batch.batchName(), batch.bloodline(), batch.source(), batch.initialPopulation(),
                 boundedPopulation, boundedPopulation + " / " + batch.initialPopulation(), batch.ageDays(),
-                batch.stageName(), batch.startDate(), batch.lastRecordedEventDate());
+                    batch.stageName(), batch.startDate(), batch.lastRecordedEventDate());
         List<SelectionReviewPayload.DataAvailabilityItem> availability = payload.dataAvailability() == null
                 ? new ArrayList<>()
                 : new ArrayList<>(payload.dataAvailability());

@@ -16,12 +16,11 @@ import com.poultryprophet.user.Role;
 import com.poultryprophet.user.User;
 import com.poultryprophet.user.UserRepository;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Clock;
 import java.time.LocalDate;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -39,6 +38,7 @@ public class BatchService {
     private final UserRepository userRepository;
     private final BatchEventRepository eventRepository;
     private final PopulationProjectionService populationProjectionService;
+    private final Clock applicationClock;
     private final java.time.ZoneId farmZone;
 
     @Autowired
@@ -48,14 +48,15 @@ public class BatchService {
                         UserRepository userRepository,
                         BatchEventRepository eventRepository,
                         PopulationProjectionService populationProjectionService,
-                        @Value("${app.time-zone:Asia/Manila}") String timeZone) {
+                        Clock applicationClock) {
         this.batchRepository = batchRepository;
         this.stageRepository = stageRepository;
         this.assignmentRepository = assignmentRepository;
         this.userRepository = userRepository;
         this.eventRepository = eventRepository;
         this.populationProjectionService = populationProjectionService;
-        this.farmZone = java.time.ZoneId.of(timeZone == null ? "Asia/Manila" : timeZone);
+        this.applicationClock = applicationClock;
+        this.farmZone = applicationClock.getZone();
     }
 
     /** Compatibility constructor for focused unit tests that do not load population events. */
@@ -64,13 +65,35 @@ public class BatchService {
                         BatchHandlerAssignmentRepository assignmentRepository,
                         UserRepository userRepository) {
         this(batchRepository, stageRepository, assignmentRepository, userRepository, null,
-                new PopulationProjectionService(), "Asia/Manila");
+                new PopulationProjectionService(), Clock.system(java.time.ZoneId.of("Asia/Manila")));
+    }
+
+    /** Constructor for focused tests that need a deterministic application date. */
+    public BatchService(BatchRepository batchRepository,
+                        LifecycleStageRepository stageRepository,
+                        BatchHandlerAssignmentRepository assignmentRepository,
+                        UserRepository userRepository,
+                        Clock applicationClock) {
+        this(batchRepository, stageRepository, assignmentRepository, userRepository, null,
+                new PopulationProjectionService(), applicationClock);
     }
 
     @Transactional
     public BatchResponse create(CreateBatchRequest request, Long farmId) {
         if (farmId == null) {
             throw new BadRequestException("Join a farm before creating a batch");
+        }
+        if (request.hatchDate() == null || request.farmEntryDate() == null) {
+            throw new BadRequestException("Hatch date and farm entry date are required");
+        }
+        if (request.hatchDate().isAfter(today())) {
+            throw new BadRequestException("Hatch date cannot be in the future");
+        }
+        if (request.farmEntryDate().isAfter(today())) {
+            throw new BadRequestException("Farm entry date cannot be in the future");
+        }
+        if (request.farmEntryDate().isBefore(request.hatchDate())) {
+            throw new BadRequestException("Farm entry date cannot be before the hatch date");
         }
         if (batchRepository.existsByFarmIdAndNameIgnoreCase(farmId, request.name())) {
             throw new BadRequestException("A batch named '" + request.name() + "' already exists on this farm");
@@ -81,13 +104,17 @@ public class BatchService {
         batch.setName(request.name());
         batch.setInitialPopulation(request.initialPopulation());
         batch.setCurrentPopulation(request.initialPopulation());
-        batch.setStartDate(request.startDate());
+        // Keep the legacy field populated for older clients and reports. New calculations use
+        // hatchDate explicitly, while farmEntryDate remains independently traceable.
+        batch.setStartDate(request.startDate() == null ? request.farmEntryDate() : request.startDate());
+        batch.setHatchDate(request.hatchDate());
+        batch.setFarmEntryDate(request.farmEntryDate());
         batch.setBloodline(request.bloodline());
         batch.setSource(request.source());
         // Stage is auto-derived from age (the start/hatch date drives it); a manager can pin a
         // manual override later. This also handles registering older birds via a past start date.
-        batch.setStage(autoStageFor(request.startDate()));
-        batch.setHatchDateConfirmedAt(java.time.Instant.now());
+        batch.setStage(autoStageFor(request.hatchDate()));
+        batch.setHatchDateConfirmedAt(java.time.Instant.now(applicationClock));
         batch.setStageManual(false);
         batch.setStatus(BatchStatus.ACTIVE);
         batchRepository.save(batch);
@@ -128,9 +155,10 @@ public class BatchService {
     @Transactional
     public BatchResponse confirmHatchDate(Long batchId, Long farmId, Long userId, ConfirmHatchDateRequest request) {
         Batch batch = requireWritableBatch(batchId, farmId);
-        if (request.hatchDate().isAfter(LocalDate.now(farmZone))) throw new BadRequestException("Hatch date cannot be in the future");
+        if (request.hatchDate().isAfter(today())) throw new BadRequestException("Hatch date cannot be in the future");
         batch.setStartDate(request.hatchDate());
-        batch.setHatchDateConfirmedAt(java.time.Instant.now());
+        batch.setHatchDate(request.hatchDate());
+        batch.setHatchDateConfirmedAt(java.time.Instant.now(applicationClock));
         batch.setHatchDateConfirmedByUserId(userId);
         batch.setStage(autoStageFor(request.hatchDate()));
         return responseFor(batchRepository.save(batch));
@@ -139,7 +167,7 @@ public class BatchService {
     @Transactional(readOnly = true)
     public BatchTrackingResponse getTracking(Long batchId, Long farmId) {
         Batch batch = requireBatch(batchId, farmId);
-        long daysElapsed = BatchAgePolicy.ageDays(batch.getStartDate(), LocalDate.now(farmZone));
+        long daysElapsed = BatchAgePolicy.ageDays(batch.getHatchDate(), today());
         DevelopmentStage current = DevelopmentStage.fromDaysElapsed(daysElapsed);
 
         List<DevelopmentStage> tracked = Arrays.asList(
@@ -155,7 +183,7 @@ public class BatchService {
         }).toList();
 
         return new BatchTrackingResponse(
-                batch.getId(), batch.getName(), batch.getStartDate(),
+                batch.getId(), batch.getName(), batch.getHatchDate(),
                 daysElapsed, current, current.getDisplayName(), tracker);
     }
 
@@ -191,7 +219,7 @@ public class BatchService {
      * Shared with the dashboard overview.
      */
     public StageView resolveStage(Batch batch) {
-        long days = daysElapsed(batch.getStartDate());
+        long days = daysElapsed(batch.getHatchDate());
         LifecycleStage auto = stageRepository.findByNameIgnoreCase(autoStageName(days))
                 .orElse(batch.getStage()); // fall back to the stored stage if the seed is missing
         return new StageView(auto, true);
@@ -199,8 +227,8 @@ public class BatchService {
 
     /** Resolves the lifecycle stage as it was on a historical report date. */
     public StageView resolveStage(Batch batch, LocalDate asOfDate) {
-        LocalDate effectiveDate = asOfDate == null ? LocalDate.now(farmZone) : asOfDate;
-        long days = BatchAgePolicy.ageDays(batch.getStartDate(), effectiveDate);
+        LocalDate effectiveDate = asOfDate == null ? today() : asOfDate;
+        long days = BatchAgePolicy.ageDays(batch.getHatchDate(), effectiveDate);
         LifecycleStage auto = stageRepository.findByNameIgnoreCase(autoStageName(days))
                 .orElse(batch.getStage());
         return new StageView(auto, true);
@@ -228,9 +256,9 @@ public class BatchService {
                     batch.getCurrentPopulation() < 0 || batch.getCurrentPopulation() > batch.getInitialPopulation()
                             ? "The stored current count needs review." : null);
         }
-        LocalDate today = LocalDate.now(farmZone);
+        LocalDate today = today();
         List<BatchEvent> events = eventRepository.findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(
-                batch.getId(), batch.getStartDate(), today);
+                batch.getId(), batch.getHatchDate(), today);
         PopulationProjection projection = populationProjectionService.project(batch, events, today, farmZone);
         int display = projection.validPopulation() == null ? projection.boundedPopulation() : projection.validPopulation();
         return new PopulationDisplay(display, projection.status(), projection.reconciliationMessage());
@@ -246,7 +274,11 @@ public class BatchService {
     }
 
     private long daysElapsed(LocalDate startDate) {
-        return BatchAgePolicy.ageDays(startDate, LocalDate.now(farmZone));
+        return BatchAgePolicy.ageDays(startDate, today());
+    }
+
+    private LocalDate today() {
+        return LocalDate.now(applicationClock);
     }
 
     /**

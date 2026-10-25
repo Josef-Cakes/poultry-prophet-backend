@@ -249,9 +249,8 @@ public class TestLabService {
                 "Review synthetic batch history",
                 "Check the generated history and report. Technical validation only: " + runId,
                 batchId, null, handlerId, Instant.now().plusSeconds(3600), TaskPriority.NORMAL));
-        taskService.updateStatus(task.id(), farmId, managerId, true,
-                new UpdateTaskStatusRequest(TaskStatus.COMPLETED,
-                        "Synthetic Test Lab task completed by the manager generator."));
+        taskService.completeSystemTask(task.id(), farmId, managerId,
+                "Synthetic Test Lab task completed by the manager generator.");
     }
 
     private void createReviews(Long batchId, Long farmId, Long managerId,

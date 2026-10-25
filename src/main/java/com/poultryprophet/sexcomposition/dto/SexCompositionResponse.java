@@ -10,14 +10,19 @@ public record SexCompositionResponse(
         int maleCount, int femaleCount, int unclassifiedCount, Long recordedBy,
         String revisionReason, String notes, UUID operationId, Long supersedesRecordId,
         String status, Instant createdAt, Long baselineEventId,
-        LocalDate projectedAsOf, String projectionStatus, String projectionMessage
+        LocalDate projectedAsOf, String projectionStatus, String projectionMessage,
+        Integer recordedPopulationAsOfObservation, Integer recordedMaleCount,
+        Integer recordedFemaleCount, Integer recordedUnclassifiedCount,
+        Integer projectedPopulation, Integer projectedMaleCount,
+        Integer projectedFemaleCount, Integer projectedUnclassifiedCount
 ) {
     public static SexCompositionResponse from(BatchSexComposition row) {
         return new SexCompositionResponse(row.getId(), row.getFarmId(), row.getBatchId(), row.getObservedOn(),
                 row.getPopulationAsOfObservation(), row.getMaleCount(), row.getFemaleCount(), row.getUnclassifiedCount(),
                 row.getRecordedBy(), row.getRevisionReason(), row.getNotes(), row.getOperationId(),
                 row.getSupersedesRecordId(), row.getStatus(), row.getCreatedAt(), row.getBaselineEventId(),
-                null, null, null);
+                null, null, null, row.getPopulationAsOfObservation(), row.getMaleCount(),
+                row.getFemaleCount(), row.getUnclassifiedCount(), null, null, null, null);
     }
 
     public static SexCompositionResponse fromProjected(BatchSexComposition row,
@@ -26,6 +31,9 @@ public record SexCompositionResponse(
                 projection.total(), projection.maleCount(), projection.femaleCount(), projection.unclassifiedCount(),
                 row.getRecordedBy(), row.getRevisionReason(), row.getNotes(), row.getOperationId(),
                 row.getSupersedesRecordId(), row.getStatus(), row.getCreatedAt(), row.getBaselineEventId(),
-                projection.projectedAsOf(), projection.status(), projection.message());
+                projection.projectedAsOf(), projection.status(), projection.message(),
+                row.getPopulationAsOfObservation(), row.getMaleCount(), row.getFemaleCount(),
+                row.getUnclassifiedCount(), projection.total(), projection.maleCount(),
+                projection.femaleCount(), projection.unclassifiedCount());
     }
 }

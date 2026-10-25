@@ -1,6 +1,7 @@
 package com.poultryprophet.inventory;
 
 import com.poultryprophet.inventory.dto.*;
+import com.poultryprophet.common.PageResponse;
 import com.poultryprophet.input.dto.FarmInputLogResponse;
 import com.poultryprophet.security.CustomUserDetails;
 import jakarta.validation.Valid;
@@ -52,6 +53,16 @@ public class InventoryController {
                                                      @RequestParam(required = false) Long batchId,
                                                      @AuthenticationPrincipal CustomUserDetails principal) {
         return service.movements(principal.getFarmId(), productId, batchId);
+    }
+
+    @GetMapping("/movements/page")
+    @PreAuthorize("hasRole('MANAGER')")
+    public PageResponse<InventoryMovementResponse> movementsPage(@RequestParam(defaultValue = "0") int page,
+                                                                 @RequestParam(defaultValue = "20") int size,
+                                                                 @RequestParam(required = false) Long productId,
+                                                                 @RequestParam(required = false) Long batchId,
+                                                                 @AuthenticationPrincipal CustomUserDetails principal) {
+        return service.movementsPage(principal.getFarmId(), productId, batchId, page, size);
     }
 
     @GetMapping("/pending-review")

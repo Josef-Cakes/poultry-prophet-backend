@@ -18,6 +18,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -46,8 +47,23 @@ public class GlobalExceptionHandler {
         // detailed SQL remains server-side; the client receives a safe next step.
         log.error("Database constraint rejected request: method={} uri={}",
                 request.getMethod(), request.getRequestURI(), ex);
-        return build(HttpStatus.CONFLICT,
-                "The request conflicts with the current farm records. Refresh the batch and try again.");
+        String detail = databaseDetail(ex);
+        String message = detail.contains("uq_current_sex_composition")
+                ? "Another sex-composition update was saved. Refresh the batch and enter the latest counts."
+                : detail.contains("ck_sex_counts_match_population")
+                    ? "The sex counts no longer match the batch population. Refresh the batch and enter the current counts."
+                    : "The request conflicts with the current farm records. Refresh the batch and try again.";
+        return build(HttpStatus.CONFLICT, message);
+    }
+
+    private String databaseDetail(Throwable error) {
+        StringBuilder detail = new StringBuilder();
+        Throwable current = error;
+        while (current != null) {
+            if (current.getMessage() != null) detail.append(current.getMessage()).append(' ');
+            current = current.getCause();
+        }
+        return detail.toString().toLowerCase(java.util.Locale.ROOT);
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -90,6 +106,15 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(AuthenticationException.class)
     public ResponseEntity<ApiError> handleAuth(AuthenticationException ex) {
         return build(HttpStatus.UNAUTHORIZED, ex.getMessage());
+    }
+
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<ApiError> handleUnexpected(Exception ex, HttpServletRequest request) {
+        String reference = UUID.randomUUID().toString().substring(0, 8);
+        log.error("Unhandled request failure: reference={} method={} uri={}",
+                reference, request.getMethod(), request.getRequestURI(), ex);
+        return build(HttpStatus.INTERNAL_SERVER_ERROR,
+                "The server could not complete this request. Reference: " + reference);
     }
 
     private ResponseEntity<ApiError> build(HttpStatus status, String message) {

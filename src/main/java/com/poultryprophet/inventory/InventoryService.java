@@ -2,6 +2,7 @@ package com.poultryprophet.inventory;
 
 import com.poultryprophet.batch.BatchService;
 import com.poultryprophet.common.BadRequestException;
+import com.poultryprophet.common.PageResponse;
 import com.poultryprophet.common.NotFoundException;
 import com.poultryprophet.finance.FinanceService;
 import com.poultryprophet.finance.FinanceTransactionType;
@@ -14,12 +15,17 @@ import com.poultryprophet.input.dto.FarmInputLogResponse;
 import com.poultryprophet.inventory.dto.*;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
+import jakarta.persistence.criteria.Predicate;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.ArrayList;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -251,9 +257,26 @@ public class InventoryService {
             return movementRepository.findByFarmIdAndBatchIdOrderByOccurredAtDescCreatedAtDesc(farmId, batchId)
                     .stream().map(InventoryMovementResponse::from).toList();
         }
-        return movementRepository.findAll().stream().filter(value -> farmId.equals(value.getFarmId()))
-                .sorted((a, b) -> b.getOccurredAt().compareTo(a.getOccurredAt()))
-                .map(InventoryMovementResponse::from).toList();
+        return movementRepository.findByFarmIdOrderByOccurredAtDescCreatedAtDesc(farmId)
+                .stream().map(InventoryMovementResponse::from).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public PageResponse<InventoryMovementResponse> movementsPage(Long farmId, Long productId, Long batchId,
+                                                                  int page, int size) {
+        requireFarm(farmId);
+        int safePage = Math.max(0, page);
+        int safeSize = Math.max(1, Math.min(size, 50));
+        Specification<InventoryMovement> specification = (root, query, cb) -> {
+            List<Predicate> predicates = new ArrayList<>();
+            predicates.add(cb.equal(root.get("farmId"), farmId));
+            if (productId != null) predicates.add(cb.equal(root.get("farmProductId"), productId));
+            if (batchId != null) predicates.add(cb.equal(root.get("batchId"), batchId));
+            return cb.and(predicates.toArray(Predicate[]::new));
+        };
+        return PageResponse.from(movementRepository.findAll(specification, PageRequest.of(safePage, safeSize,
+                Sort.by(Sort.Order.desc("occurredAt"), Sort.Order.desc("createdAt"), Sort.Order.desc("id")))),
+                InventoryMovementResponse::from);
     }
 
     @Transactional(readOnly = true)

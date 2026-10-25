@@ -52,7 +52,7 @@ public class DashboardService {
     }
 
     private BatchDashboardResponse toResponse(Batch batch, Long farmId, LocalDate today) {
-        LocalDate periodStart = batch.getStartDate().isAfter(today) ? today : batch.getStartDate();
+        LocalDate periodStart = batch.getHatchDate().isAfter(today) ? today : batch.getHatchDate();
         SelectionReviewPayload payload = selectionReviewService.preview(
                 batch.getId(), farmId, periodStart, today, today, false);
         SelectionReviewPayload.PopulationSummary population = payload.population();

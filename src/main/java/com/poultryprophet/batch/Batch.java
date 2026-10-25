@@ -39,7 +39,14 @@ public class Batch {
     @Column(nullable = false)
     private LocalDate startDate;
 
-    /** startDate is the hatch date. Legacy batches may be unconfirmed until a manager verifies it. */
+    /** Legacy compatibility date. New records use hatchDate and farmEntryDate explicitly. */
+    @Column(name = "hatch_date")
+    private LocalDate hatchDate;
+
+    /** The date this flock physically entered the farm. Nullable for legacy rows. */
+    @Column(name = "farm_entry_date")
+    private LocalDate farmEntryDate;
+
     @Column(name = "hatch_date_confirmed_at")
     private Instant hatchDateConfirmedAt;
 
@@ -140,6 +147,22 @@ public class Batch {
 
     public void setStartDate(LocalDate startDate) {
         this.startDate = startDate;
+    }
+
+    public LocalDate getHatchDate() {
+        return hatchDate != null ? hatchDate : startDate;
+    }
+
+    public void setHatchDate(LocalDate hatchDate) {
+        this.hatchDate = hatchDate;
+    }
+
+    public LocalDate getFarmEntryDate() {
+        return farmEntryDate;
+    }
+
+    public void setFarmEntryDate(LocalDate farmEntryDate) {
+        this.farmEntryDate = farmEntryDate;
     }
 
     public Instant getHatchDateConfirmedAt() { return hatchDateConfirmedAt; }

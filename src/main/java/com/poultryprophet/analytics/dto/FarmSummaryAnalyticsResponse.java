@@ -24,7 +24,8 @@ public record FarmSummaryAnalyticsResponse(
         List<String> limitations
 ) {
     public record PopulationSummary(long activeBatches, long initialPopulation,
-                                    long currentPopulation, boolean available) {}
+                                    long currentPopulation, LocalDate asOfDate,
+                                    boolean available) {}
     public record EventSummary(long healthRelatedDeaths, long otherLosses,
                                long healthConcerns, long interventions,
                                long totalEvents, long birdsAffected) {}
@@ -33,7 +34,8 @@ public record FarmSummaryAnalyticsResponse(
                                  String label, String unit, long healthConcerns,
                                  long healthRelatedDeaths, long otherLosses,
                                  long interventions, long otherEvents) {}
-    public record FinanceSummary(String currency, String income, String expense,
+    public record FinanceSummary(String currency, String income, String saleIncome,
+                                 long saleTransactionCount, String expense,
                                  String net, long transactionCount,
                                  List<CashFlowBucket> series,
                                  List<CategoryTotal> categories,
@@ -46,6 +48,6 @@ public record FarmSummaryAnalyticsResponse(
                               double completionRatePercent, boolean available) {}
     public record IncubationSummary(long totalCycles, long completedCycles,
                                     long inProgressCycles, int finalizedEggsLoaded,
-                                    int finalizedHatched, double finalizedHatchRatePercent,
-                                    double averageDurationDays, boolean available) {}
+                                    int finalizedHatched, Double finalizedHatchRatePercent,
+                                    Double averageDurationDays, boolean available) {}
 }

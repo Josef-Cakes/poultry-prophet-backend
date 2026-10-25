@@ -2,6 +2,7 @@ package com.poultryprophet.input;
 
 import com.poultryprophet.batch.BatchService;
 import com.poultryprophet.common.BadRequestException;
+import com.poultryprophet.common.PageResponse;
 import com.poultryprophet.common.ConflictException;
 import com.poultryprophet.common.NotFoundException;
 import com.poultryprophet.incubation.IncubationCycle;
@@ -16,9 +17,14 @@ import com.poultryprophet.vaccination.VaccinationInputLinker;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
+import jakarta.persistence.criteria.Predicate;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.ArrayList;
 import java.util.UUID;
 
 @Service
@@ -138,6 +144,26 @@ public class FarmInputService {
             logs = repository.findByFarmIdOrderByRecordedAtDesc(farmId);
         }
         return logs.stream().map(FarmInputLogResponse::from).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public PageResponse<FarmInputLogResponse> page(Long farmId, Long batchId, Long cycleId,
+                                                   Boolean farmWide, InputProductType productType,
+                                                   int page, int size) {
+        if (farmId == null) throw new BadRequestException("Join a farm before viewing inputs");
+        int safePage = Math.max(0, page);
+        int safeSize = Math.max(1, Math.min(size, 50));
+        Specification<FarmInputLog> specification = (root, query, cb) -> {
+            List<Predicate> predicates = new ArrayList<>();
+            predicates.add(cb.equal(root.get("farmId"), farmId));
+            if (batchId != null) predicates.add(cb.equal(root.get("batchId"), batchId));
+            if (cycleId != null) predicates.add(cb.equal(root.get("incubationCycleId"), cycleId));
+            if (Boolean.TRUE.equals(farmWide)) predicates.add(cb.isNull(root.get("batchId")));
+            if (productType != null) predicates.add(cb.equal(root.get("productType"), productType));
+            return cb.and(predicates.toArray(Predicate[]::new));
+        };
+        return PageResponse.from(repository.findAll(specification, PageRequest.of(safePage, safeSize,
+                Sort.by(Sort.Order.desc("recordedAt"), Sort.Order.desc("id")))), FarmInputLogResponse::from);
     }
 
     private String trimToNull(String value) {
