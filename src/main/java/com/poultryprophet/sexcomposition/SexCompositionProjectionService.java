@@ -79,7 +79,7 @@ public class SexCompositionProjectionService {
 
     private List<BatchEvent> eventsThrough(Batch batch, LocalDate asOf) {
         return eventRepository.findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(
-                batch.getId(), batch.getStartDate(), asOf);
+                batch.getId(), batch.getHatchDate(), asOf);
     }
 
     private SexCompositionProjection apply(BatchSexComposition baseline, List<BatchEvent> sourceEvents,

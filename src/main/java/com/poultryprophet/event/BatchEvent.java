@@ -11,6 +11,7 @@ import jakarta.persistence.Table;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.math.BigDecimal;
 import java.util.UUID;
 
 @Entity
@@ -80,6 +81,22 @@ public class BatchEvent {
     @Column(nullable = false, updatable = false)
     private Instant createdAt = Instant.now();
 
+    /** Time the handler observed the event; createdAt remains the server receipt/audit time. */
+    @Column(name = "occurred_at")
+    private Instant occurredAt;
+
+    @Column(name = "sale_amount", precision = 14, scale = 2)
+    private BigDecimal saleAmount;
+
+    @Column(name = "sale_currency", length = 3)
+    private String saleCurrency;
+
+    @Column(name = "sale_buyer")
+    private String saleBuyer;
+
+    @Column(name = "sale_reference")
+    private String saleReference;
+
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
 
@@ -130,6 +147,16 @@ public class BatchEvent {
 
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
+    public Instant getOccurredAt() { return occurredAt; }
+    public void setOccurredAt(Instant occurredAt) { this.occurredAt = occurredAt; }
+    public BigDecimal getSaleAmount() { return saleAmount; }
+    public void setSaleAmount(BigDecimal saleAmount) { this.saleAmount = saleAmount; }
+    public String getSaleCurrency() { return saleCurrency; }
+    public void setSaleCurrency(String saleCurrency) { this.saleCurrency = saleCurrency; }
+    public String getSaleBuyer() { return saleBuyer; }
+    public void setSaleBuyer(String saleBuyer) { this.saleBuyer = saleBuyer; }
+    public String getSaleReference() { return saleReference; }
+    public void setSaleReference(String saleReference) { this.saleReference = saleReference; }
     /** Optional context for SALE events; nullable for existing and non-sale events. */
     @Enumerated(EnumType.STRING)
     @Column(name = "sale_purpose")

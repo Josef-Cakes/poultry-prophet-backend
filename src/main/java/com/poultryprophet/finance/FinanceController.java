@@ -1,6 +1,7 @@
 package com.poultryprophet.finance;
 
 import com.poultryprophet.finance.dto.*;
+import com.poultryprophet.common.PageResponse;
 import com.poultryprophet.security.CustomUserDetails;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -30,6 +31,20 @@ public class FinanceController {
                                                    @AuthenticationPrincipal CustomUserDetails principal) {
         return service.list(principal.getFarmId(), start, end);
     }
+    @GetMapping("/page")
+    public PageResponse<FinancialTransactionResponse> page(@RequestParam(defaultValue = "0") int page,
+                                                           @RequestParam(defaultValue = "20") int size,
+                                                           @RequestParam(required = false) LocalDate start,
+                                                           @RequestParam(required = false) LocalDate end,
+                                                           @RequestParam(required = false) Long batchId,
+                                                           @RequestParam(required = false) Boolean farmWide,
+                                                           @RequestParam(required = false) FinanceTransactionType type,
+                                                           @RequestParam(required = false) String category,
+                                                           @RequestParam(required = false) String sourceType,
+                                                           @RequestParam(required = false) FinanceTransactionStatus status,
+                                                           @AuthenticationPrincipal CustomUserDetails principal) {
+        return service.page(principal.getFarmId(), start, end, batchId, farmWide, type, category, sourceType, status, page, size);
+    }
     @PostMapping("/{id}/void")
     public FinancialTransactionResponse voidTransaction(@PathVariable Long id,
                                                         @RequestBody(required = false) VoidFinancialTransactionRequest req,
@@ -46,8 +61,13 @@ public class FinanceController {
     public FinanceAnalyticsResponse analytics(@RequestParam(required = false) Long batchId,
                                               @RequestParam(required = false) LocalDate start,
                                               @RequestParam(required = false) LocalDate end,
+                                              @RequestParam(required = false) FinanceTransactionType type,
+                                              @RequestParam(required = false) String category,
+                                              @RequestParam(required = false) String sourceType,
+                                              @RequestParam(required = false) FinanceTransactionStatus status,
+                                              @RequestParam(defaultValue = "false") boolean farmWide,
                                               @AuthenticationPrincipal CustomUserDetails principal) {
-        return service.analytics(principal.getFarmId(), batchId, start, end);
+        return service.analytics(principal.getFarmId(), batchId, start, end, type, farmWide, category, sourceType, status);
     }
 
 }

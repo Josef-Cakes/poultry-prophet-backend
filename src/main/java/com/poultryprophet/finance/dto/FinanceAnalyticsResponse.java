@@ -19,6 +19,9 @@ public record FinanceAnalyticsResponse(
 ) {
     public record Totals(
             BigDecimal recordedIncome,
+            BigDecimal saleIncome,
+            BigDecimal otherIncome,
+            long saleTransactionCount,
             BigDecimal recordedExpense,
             BigDecimal recordedNetCashFlow,
             BigDecimal productsConsumedCost,
@@ -27,7 +30,17 @@ public record FinanceAnalyticsResponse(
             boolean productCostComplete,
             long postedTransactionCount,
             long voidedTransactionCount
-    ) {}
+    ) {
+        /** Compatibility constructor for callers that do not yet request the sale breakdown. */
+        public Totals(BigDecimal recordedIncome, BigDecimal recordedExpense, BigDecimal recordedNetCashFlow,
+                      BigDecimal productsConsumedCost, BigDecimal totalRecordedBatchCost,
+                      BigDecimal recordedContribution, boolean productCostComplete,
+                      long postedTransactionCount, long voidedTransactionCount) {
+            this(recordedIncome, BigDecimal.ZERO, recordedIncome, 0L, recordedExpense, recordedNetCashFlow,
+                    productsConsumedCost, totalRecordedBatchCost, recordedContribution,
+                    productCostComplete, postedTransactionCount, voidedTransactionCount);
+        }
+    }
 
     public record SeriesPoint(
             LocalDate periodStart,

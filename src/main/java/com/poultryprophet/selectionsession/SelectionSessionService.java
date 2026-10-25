@@ -192,7 +192,7 @@ public class SelectionSessionService {
 
     private void validateCounts(Batch batch, CreateSelectionSessionRequest request, boolean finalizing,
                                 LocalDate selectionDate) {
-        if (selectionDate.isBefore(batch.getStartDate())) {
+        if (selectionDate.isBefore(batch.getHatchDate())) {
             throw new BadRequestException("Selection date cannot be before the batch start date");
         }
         if (selectionDate.isAfter(today())) {
@@ -226,7 +226,7 @@ public class SelectionSessionService {
 
     private long populationAt(Batch batch, LocalDate date) {
         List<BatchEvent> events = eventRepository
-                .findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(batch.getId(), batch.getStartDate(), date);
+                .findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(batch.getId(), batch.getHatchDate(), date);
         PopulationProjection projection = populationProjectionService.project(batch, events, date, farmZone);
         if (projection.validPopulation() == null) {
             throw new BadRequestException("Population records need reconciliation before selection can be recorded"

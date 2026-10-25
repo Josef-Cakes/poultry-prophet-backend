@@ -170,7 +170,7 @@ public class ScoringService {
         double sum = 0.0;
         int counted = 0;
         for (RangingRecord r : ranging) {
-            double weeks = ChronoUnit.DAYS.between(batch.getStartDate(), r.getRecordDate()) / 7.0;
+            double weeks = ChronoUnit.DAYS.between(batch.getHatchDate(), r.getRecordDate()) / 7.0;
             double expected = props.expectedWeightForWeek(weeks);
             if (expected <= 0.0) {
                 continue;

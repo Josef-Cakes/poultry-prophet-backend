@@ -80,7 +80,7 @@ public class BatchComparisonService {
 
         LocalDate today = LocalDate.now(clock);
         int availableWindowDays = batches.stream()
-                .mapToInt(batch -> (int) Math.max(1, ChronoUnit.DAYS.between(batch.getStartDate(), today) + 1))
+                .mapToInt(batch -> (int) Math.max(1, ChronoUnit.DAYS.between(batch.getHatchDate(), today) + 1))
                 .min().orElse(1);
         int effectiveDays = Math.min(windowDays, availableWindowDays);
         List<String> warnings = new ArrayList<>();
@@ -104,9 +104,9 @@ public class BatchComparisonService {
     }
 
     private BatchComparisonResponse.BatchComparisonRow row(Long farmId, Batch batch, int windowDays) {
-        LocalDate end = batch.getStartDate().plusDays(windowDays - 1L);
+        LocalDate end = batch.getHatchDate().plusDays(windowDays - 1L);
         List<BatchEvent> events = eventRepository.findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(
-                batch.getId(), batch.getStartDate(), end);
+                batch.getId(), batch.getHatchDate(), end);
         long healthDeaths = 0;
         long healthConcerns = 0;
         Map<String, Long> changes = new LinkedHashMap<>();
@@ -119,7 +119,7 @@ public class BatchComparisonService {
                     : Math.abs((long) event.getAffectedCount()), Long::sum);
         }
         List<FarmInputLog> productRecords = inputRepository.findByFarmIdAndBatchIdOrderByRecordedAtDesc(farmId, batch.getId())
-                .stream().filter(input -> within(input, batch.getStartDate(), end)).toList();
+                .stream().filter(input -> within(input, batch.getHatchDate(), end)).toList();
         SelectionSessionResponse selection = selectionSessionService.latestFinalized(batch.getId(), farmId, end);
         PopulationProjection projection = populationProjectionService.project(batch, events, end, farmZone);
         List<String> limitations = new ArrayList<>();
@@ -130,7 +130,7 @@ public class BatchComparisonService {
         Double lossRate = batch.getInitialPopulation() == 0 ? null
                 : round(healthDeaths * 100.0 / batch.getInitialPopulation());
         return new BatchComparisonResponse.BatchComparisonRow(
-                batch.getId(), batch.getName(), batch.getBloodline(), batch.getSource(), batch.getStartDate(), end,
+                batch.getId(), batch.getName(), batch.getBloodline(), batch.getSource(), batch.getHatchDate(), end,
                 batch.getInitialPopulation(), projection.validPopulation(), projection.status(),
                 projection.reconciliationMessage(), projection.firstInvalidEventDate(), healthDeaths, lossRate, healthConcerns,
                 productRecords.size(), changes,

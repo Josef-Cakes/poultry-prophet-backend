@@ -12,4 +12,13 @@ class BatchAgePolicyTest {
         assertThat(BatchAgePolicy.ageDays(hatch, hatch.minusDays(2))).isZero();
         assertThat(BatchAgePolicy.ageDays(hatch, hatch.plusDays(31))).isEqualTo(31);
     }
+
+    @Test
+    void lifecycleStagesFollowTheDayZeroBoundaries() {
+        assertThat(BatchAgePolicy.stageName(0)).isEqualTo("brooding");
+        assertThat(BatchAgePolicy.stageName(30)).isEqualTo("brooding");
+        assertThat(BatchAgePolicy.stageName(31)).isEqualTo("ranging");
+        assertThat(BatchAgePolicy.stageName(120)).isEqualTo("ranging");
+        assertThat(BatchAgePolicy.stageName(121)).isEqualTo("pre-conditioning");
+    }
 }

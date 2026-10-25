@@ -13,4 +13,6 @@ public interface IncubationCycleRepository extends JpaRepository<IncubationCycle
     List<IncubationCycle> findByFarmIdAndLoadedDateBetweenOrderByLoadedDateAsc(Long farmId,
                                                                                  java.time.LocalDate start,
                                                                                  java.time.LocalDate end);
+    List<IncubationCycle> findByFarmIdAndStatusAndActualHatchDateBetweenOrderByActualHatchDateAsc(
+            Long farmId, IncubationStatus status, java.time.LocalDate start, java.time.LocalDate end);
 }

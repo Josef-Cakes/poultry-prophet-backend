@@ -27,6 +27,11 @@ import com.poultryprophet.user.Role;
 import com.poultryprophet.vaccination.VaccinationService;
 import com.poultryprophet.vaccination.dto.RecordVaccinationRequest;
 import com.poultryprophet.vaccination.dto.VaccinationPlanItemResponse;
+import com.poultryprophet.vaccination.dto.CreateVaccinationProgramRequest;
+import com.poultryprophet.vaccination.dto.VaccinationProgramResponse;
+import com.poultryprophet.task.TaskService;
+import com.poultryprophet.task.dto.TaskResponse;
+import com.poultryprophet.task.dto.UpdateTaskStatusRequest;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validator;
@@ -52,6 +57,8 @@ public class SyncOperationService {
     private final Validator validator;
     private final BatchSexCompositionService sexCompositionService;
     private final VaccinationService vaccinationService;
+    private final TaskService taskService;
+    private final OfflineSyncReceiptRepository receiptRepository;
 
     @Autowired
     public SyncOperationService(ObjectMapper objectMapper, BatchEventService eventService,
@@ -61,7 +68,9 @@ public class SyncOperationService {
                                 BatchSelectionSessionRepository selectionSessionRepository,
                                 Validator validator,
                                 BatchSexCompositionService sexCompositionService,
-                                VaccinationService vaccinationService) {
+                                VaccinationService vaccinationService,
+                                TaskService taskService,
+                                OfflineSyncReceiptRepository receiptRepository) {
         this.objectMapper = objectMapper;
         this.eventService = eventService;
         this.inputService = inputService;
@@ -72,6 +81,8 @@ public class SyncOperationService {
         this.validator = validator;
         this.sexCompositionService = sexCompositionService;
         this.vaccinationService = vaccinationService;
+        this.taskService = taskService;
+        this.receiptRepository = receiptRepository;
     }
 
     /** Compatibility constructor for focused sync tests that do not exercise sex or vaccination replay. */
@@ -82,7 +93,7 @@ public class SyncOperationService {
                                 BatchSelectionSessionRepository selectionSessionRepository,
                                 Validator validator) {
         this(objectMapper, eventService, inputService, eventRepository, inputRepository,
-                selectionSessionService, selectionSessionRepository, validator, null, null);
+                selectionSessionService, selectionSessionRepository, validator, null, null, null, null);
     }
 
     public SyncOperationsResponse sync(SyncOperationsRequest request, Long farmId, Long userId, Role role) {
@@ -121,7 +132,9 @@ public class SyncOperationService {
                     payload = new CreateBatchEventRequest(
                             operation.occurredAt().atZone(ZoneOffset.UTC).toLocalDate(),
                             payload.eventType(), payload.title(), payload.severityLabel(), payload.affectedCount(),
-                            payload.details(), payload.tags(), payload.operationId(), payload.populationDelta());
+                            payload.details(), payload.tags(), payload.operationId(), payload.populationDelta(),
+                            payload.sexAllocation(), payload.occurredAt() == null ? operation.occurredAt() : payload.occurredAt(),
+                            payload.saleDetails());
                 }
                 validatePayload(payload, "batch event");
                 if (!operation.operationId().equals(payload.operationId())) {
@@ -194,17 +207,75 @@ public class SyncOperationService {
                 yield SyncOperationResult.applied(operation.operationId(), saved.id());
             }
             case "SEX_COMPOSITION" -> {
-                CreateSexCompositionRequest payload = objectMapper.convertValue(operation.payload(), CreateSexCompositionRequest.class);
+                CreateSexCompositionRequest payload = readPayload(operation, CreateSexCompositionRequest.class, "sex composition");
+                validatePayload(payload, "sex composition");
                 if (!operation.operationId().equals(payload.operationId())) throw new BadRequestException("The operation ID does not match the sex composition payload");
-                SexCompositionResponse saved = sexCompositionService.record(operation.batchId(), farmId, userId, payload);
-                yield SyncOperationResult.applied(operation.operationId(), saved.id());
+                BatchSexCompositionService.RecordResult result = sexCompositionService.recordResult(operation.batchId(), farmId, userId, payload);
+                yield result.alreadyApplied()
+                        ? SyncOperationResult.alreadyApplied(operation.operationId(), result.response().id())
+                        : SyncOperationResult.applied(operation.operationId(), result.response().id());
             }
             case "VACCINATION_PLAN" -> {
                 Long planId = operation.payload().path("planId").asLong(0);
                 if (planId <= 0) throw new BadRequestException("Vaccination sync payload is missing planId");
                 RecordVaccinationRequest payload = objectMapper.convertValue(operation.payload(), RecordVaccinationRequest.class);
+                if (payload.recordedAt() == null) {
+                    payload = new RecordVaccinationRequest(operation.occurredAt(), payload.quantity(), payload.unit(),
+                            payload.notes(), payload.operationId());
+                }
                 if (!operation.operationId().equals(payload.operationId())) throw new BadRequestException("The operation ID does not match the vaccination payload");
                 VaccinationPlanItemResponse saved = vaccinationService.record(planId, farmId, userId, role, payload);
+                yield SyncOperationResult.applied(operation.operationId(), saved.id());
+            }
+            case "VACCINATION_SCHEDULE" -> {
+                OfflineSyncReceipt receipt = receiptRepository == null ? null
+                        : receiptRepository.findByOperationIdAndFarmId(operation.operationId(), farmId).orElse(null);
+                if (receipt != null) {
+                    yield SyncOperationResult.alreadyApplied(operation.operationId(), receipt.getServerId());
+                }
+                String action = operation.payload().path("action").asText("ASSIGN").toUpperCase(java.util.Locale.ROOT);
+                long programId = operation.payload().path("programId").asLong(0);
+                if (action.equals("CREATE_AND_ASSIGN")) {
+                    CreateVaccinationProgramRequest programPayload = objectMapper.convertValue(
+                            operation.payload().path("program"), CreateVaccinationProgramRequest.class);
+                    VaccinationProgramResponse created = vaccinationService.createProgram(farmId, userId, programPayload);
+                    programId = created.id();
+                    action = operation.payload().path("replace").asBoolean(false) ? "REPLACE" : "ASSIGN";
+                }
+                if (programId <= 0 || (!action.equals("ASSIGN") && !action.equals("REPLACE"))) {
+                    throw new BadRequestException("Vaccination schedule sync needs action and programId");
+                }
+                long assignedProgramId = programId;
+                List<VaccinationPlanItemResponse> current = vaccinationService.plan(operation.batchId(), farmId);
+                boolean alreadyApplied = !current.isEmpty() && current.stream().allMatch(item -> item.programId() == assignedProgramId);
+                List<VaccinationPlanItemResponse> saved = alreadyApplied
+                        ? current
+                        : action.equals("REPLACE")
+                            ? vaccinationService.replace(operation.batchId(), farmId, userId,
+                                new com.poultryprophet.vaccination.dto.ReplaceVaccinationPlanRequest(assignedProgramId))
+                            : vaccinationService.assign(operation.batchId(), farmId, userId,
+                                new com.poultryprophet.vaccination.dto.AssignVaccinationProgramRequest(assignedProgramId));
+                if (receiptRepository != null) {
+                    OfflineSyncReceipt created = new OfflineSyncReceipt();
+                    created.setOperationId(operation.operationId());
+                    created.setFarmId(farmId);
+                    created.setEntityType(operation.entityType());
+                    created.setServerId(saved.isEmpty() ? null : saved.get(0).id());
+                    receiptRepository.save(created);
+                }
+                yield alreadyApplied
+                        ? SyncOperationResult.alreadyApplied(operation.operationId(), saved.isEmpty() ? null : saved.get(0).id())
+                        : SyncOperationResult.applied(operation.operationId(), saved.isEmpty() ? null : saved.get(0).id());
+            }
+            case "TASK_STATUS" -> {
+                long taskId = operation.payload().path("taskId").asLong(0);
+                if (taskId <= 0) throw new BadRequestException("Task sync payload is missing taskId");
+                UpdateTaskStatusRequest payload = objectMapper.convertValue(operation.payload(), UpdateTaskStatusRequest.class);
+                if (payload.operationId() == null || !operation.operationId().equals(payload.operationId())) {
+                    payload = new UpdateTaskStatusRequest(payload.status(), payload.note(), operation.operationId(),
+                            payload.occurredAt() == null ? operation.occurredAt() : payload.occurredAt());
+                }
+                TaskResponse saved = taskService.updateStatus(taskId, farmId, userId, role == Role.MANAGER, payload);
                 yield SyncOperationResult.applied(operation.operationId(), saved.id());
             }
             default -> throw new BadRequestException("Unsupported offline operation: " + operation.entityType());

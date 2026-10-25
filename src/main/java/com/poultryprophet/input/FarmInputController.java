@@ -2,6 +2,7 @@ package com.poultryprophet.input;
 
 import com.poultryprophet.input.dto.CreateFarmInputRequest;
 import com.poultryprophet.input.dto.FarmInputLogResponse;
+import com.poultryprophet.common.PageResponse;
 import com.poultryprophet.security.CustomUserDetails;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -38,5 +39,16 @@ public class FarmInputController {
                                            @RequestParam(required = false) Long incubationCycleId,
                                            @AuthenticationPrincipal CustomUserDetails principal) {
         return service.list(principal.getFarmId(), batchId, incubationCycleId);
+    }
+
+    @GetMapping("/page")
+    public PageResponse<FarmInputLogResponse> page(@RequestParam(defaultValue = "0") int page,
+                                                  @RequestParam(defaultValue = "20") int size,
+                                                  @RequestParam(required = false) Long batchId,
+                                                  @RequestParam(required = false) Long incubationCycleId,
+                                                  @RequestParam(required = false) Boolean farmWide,
+                                                  @RequestParam(required = false) InputProductType productType,
+                                                  @AuthenticationPrincipal CustomUserDetails principal) {
+        return service.page(principal.getFarmId(), batchId, incubationCycleId, farmWide, productType, page, size);
     }
 }

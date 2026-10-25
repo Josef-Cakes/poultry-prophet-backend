@@ -52,7 +52,7 @@ public class BatchPopulationReconciliationService {
         LocalDate today = LocalDate.now(farmZone);
         List<BatchEvent> events = eventRepository
                 .findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(
-                        batchId, batch.getStartDate(), today);
+                        batchId, batch.getHatchDate(), today);
         PopulationProjection projection = populationProjectionService.projectLedger(
                 batch, events, today, farmZone);
         Integer calculated = projection.validPopulation();

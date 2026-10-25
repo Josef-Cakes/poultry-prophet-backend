@@ -1,6 +1,7 @@
 package com.poultryprophet.incubation.dto;
 
 import com.poultryprophet.incubation.IncubationCycle;
+import com.poultryprophet.incubation.IncubationMetrics;
 import com.poultryprophet.incubation.IncubationStatus;
 
 import java.time.Instant;
@@ -25,13 +26,16 @@ public record IncubationCycleResponse(
         Long closedBy,
         Instant closedAt,
         Long createdBatchId,
-        Instant createdAt
+        Instant createdAt,
+        Double hatchRatePercent,
+        Long durationDays
 ) {
     public static IncubationCycleResponse from(IncubationCycle c) {
         return new IncubationCycleResponse(c.getId(), c.getFarmId(), c.getCycleName(), c.getIncubatorCode(),
                 c.getEggSource(), c.getBloodline(), c.getLoadedDate(), c.getEggsLoaded(),
                 c.getExpectedHatchDate(), c.getActualHatchDate(), c.getHatchedCount(),
                 c.getUnhatchedCount(), c.getRemovedDamagedCount(), c.getStatus(), c.getNotes(),
-                c.getClosedBy(), c.getClosedAt(), c.getCreatedBatchId(), c.getCreatedAt());
+                c.getClosedBy(), c.getClosedAt(), c.getCreatedBatchId(), c.getCreatedAt(),
+                IncubationMetrics.hatchRatePercent(c), IncubationMetrics.durationDays(c));
     }
 }

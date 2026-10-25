@@ -2,6 +2,7 @@ package com.poultryprophet.incubation;
 
 import com.poultryprophet.batch.dto.BatchResponse;
 import com.poultryprophet.incubation.dto.CompleteIncubationRequest;
+import com.poultryprophet.incubation.dto.CreateBatchFromIncubationRequest;
 import com.poultryprophet.incubation.dto.CreateIncubationCycleRequest;
 import com.poultryprophet.incubation.dto.IncubationCycleResponse;
 import com.poultryprophet.incubation.dto.UpdateIncubationCycleRequest;
@@ -32,8 +33,8 @@ public class IncubationController {
     }
 
     @PostMapping
-    // Farm membership is validated by the service; both farm roles may record an egg load.
-    @PreAuthorize("isAuthenticated()")
+    // Handlers record the physical egg load; managers review and finalize it below.
+    @PreAuthorize("hasRole('HANDLER')")
     public ResponseEntity<IncubationCycleResponse> create(
             @Valid @RequestBody CreateIncubationCycleRequest request,
             @AuthenticationPrincipal CustomUserDetails principal) {
@@ -80,7 +81,8 @@ public class IncubationController {
     @PostMapping("/{id}/create-batch")
     @PreAuthorize("hasRole('MANAGER')")
     public BatchResponse createBatch(@PathVariable Long id,
+                                     @Valid @RequestBody CreateBatchFromIncubationRequest request,
                                      @AuthenticationPrincipal CustomUserDetails principal) {
-        return service.createBatch(id, principal.getFarmId());
+        return service.createBatch(id, principal.getFarmId(), request.farmEntryDate());
     }
 }

@@ -149,11 +149,11 @@ public class VaccinationService {
                                  VaccinationProgram program, List<VaccinationProgramItem> items) {
         Long batchId = batch.getId();
         for (VaccinationProgramItem item : items) {
-            LocalDate due = batch.getStartDate().plusDays(item.getNormalizedOffsetDays());
+            LocalDate due = batch.getHatchDate().plusDays(item.getNormalizedOffsetDays());
             LocalDate remind = due.minusDays(item.getReminderLeadDays());
             BatchVaccinationPlanItem plan = new BatchVaccinationPlanItem(); plan.setFarmId(farmId); plan.setBatchId(batchId); plan.setProgramId(program.getId());
-            plan.setProgramItemId(item.getId()); plan.setVaccineName(item.getVaccineName()); plan.setFarmProductId(item.getFarmProductId()); plan.setHatchDateSnapshot(batch.getStartDate());
-            plan.setNormalizedOffsetDays(item.getNormalizedOffsetDays()); plan.setDueDate(due); plan.setRemindOn(remind.isBefore(batch.getStartDate()) ? batch.getStartDate() : remind);
+            plan.setProgramItemId(item.getId()); plan.setVaccineName(item.getVaccineName()); plan.setFarmProductId(item.getFarmProductId()); plan.setHatchDateSnapshot(batch.getHatchDate());
+            plan.setNormalizedOffsetDays(item.getNormalizedOffsetDays()); plan.setDueDate(due); plan.setRemindOn(remind.isBefore(batch.getHatchDate()) ? batch.getHatchDate() : remind);
             BatchVaccinationPlanItem saved = planRepository.save(plan);
             HandlerTask task = new HandlerTask(); task.setFarmId(farmId); task.setBatchId(batchId); task.setTitle("Vaccination: " + item.getVaccineName());
             task.setInstructions(item.getInstructions() == null ? "Record when done. Follow the farm's vaccine label and manager guidance." : item.getInstructions());
@@ -168,7 +168,12 @@ public class VaccinationService {
     public VaccinationPlanItemResponse record(Long planId, Long farmId, Long userId, Role role, RecordVaccinationRequest request) {
         requireActiveUser(userId, farmId, role);
         BatchVaccinationPlanItem plan = planRepository.findByIdAndFarmIdForUpdate(planId, farmId).orElseThrow(() -> new NotFoundException("Vaccination plan item not found"));
-        if ("COMPLETED".equals(plan.getStatus())) return VaccinationPlanItemResponse.from(plan, LocalDate.now(FARM_ZONE));
+        if ("COMPLETED".equals(plan.getStatus())) {
+            if (request.operationId() == null || request.operationId().equals(plan.getCompletionOperationId())) {
+                return VaccinationPlanItemResponse.from(plan, LocalDate.now(FARM_ZONE));
+            }
+            throw new ConflictException("This vaccination item was already completed by a different operation");
+        }
         if (!"SCHEDULED".equals(plan.getStatus())) throw new ConflictException("This vaccination item is no longer open");
         UUID operationId = request.operationId() == null ? UUID.randomUUID() : request.operationId();
         String inventoryUnit = request.unit();
@@ -183,7 +188,8 @@ public class VaccinationService {
         CreateFarmInputRequest input = new CreateFarmInputRequest(plan.getBatchId(), null, request.recordedAt(), InputProductType.VACCINE,
                 plan.getVaccineName(), plan.getVaccineName(), request.quantity(), inventoryUnit, null, "Vaccination", request.notes(), operationId, plan.getFarmProductId(), null);
         FarmInputLogResponse savedInput = inputService.create(farmId, userId, role, input);
-        plan.setStatus("COMPLETED"); plan.setCompletedInputLogId(savedInput.id()); plan.setCompletedBy(userId); plan.setCompletedAt(Instant.now()); plan.setCompletionOperationId(operationId);
+        Instant appliedAt = request.recordedAt() == null ? Instant.now() : request.recordedAt();
+        plan.setStatus("COMPLETED"); plan.setCompletedInputLogId(savedInput.id()); plan.setCompletedBy(userId); plan.setCompletedAt(appliedAt); plan.setCompletionOperationId(operationId);
         if (plan.getTaskId() != null) taskRepository.findByIdAndFarmId(plan.getTaskId(), farmId).ifPresent(task -> { task.setStatus(TaskStatus.COMPLETED); task.setCompletedAt(Instant.now()); task.setCompletedBy(userId); task.setCompletionNote("Vaccination recorded"); task.setUpdatedAt(Instant.now()); taskRepository.save(task); });
         return VaccinationPlanItemResponse.from(planRepository.save(plan), LocalDate.now(FARM_ZONE));
     }

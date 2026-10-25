@@ -20,6 +20,7 @@ public class FinancialTransaction {
     private String counterparty;
     @Column(columnDefinition = "text") private String description;
     @Column(name = "source_type", nullable = false, length = 32) private String sourceType = "MANUAL";
+    @Column(name = "source_event_id") private Long sourceEventId;
     @Column(name = "source_operation_id", length = 80) private String sourceOperationId;
     @Enumerated(EnumType.STRING) @Column(nullable = false) private FinanceTransactionStatus status = FinanceTransactionStatus.POSTED;
     @Column(nullable = false) private Long enteredBy;
@@ -51,6 +52,8 @@ public class FinancialTransaction {
     public void setDescription(String description) { this.description = description; }
     public String getSourceType() { return sourceType; }
     public void setSourceType(String sourceType) { this.sourceType = sourceType; }
+    public Long getSourceEventId() { return sourceEventId; }
+    public void setSourceEventId(Long sourceEventId) { this.sourceEventId = sourceEventId; }
     public String getSourceOperationId() { return sourceOperationId; }
     public void setSourceOperationId(String sourceOperationId) { this.sourceOperationId = sourceOperationId; }
     public FinanceTransactionStatus getStatus() { return status; }

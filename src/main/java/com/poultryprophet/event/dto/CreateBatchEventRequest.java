@@ -4,8 +4,11 @@ import com.poultryprophet.event.EventType;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.Valid;
 
+import java.time.Instant;
 import java.time.LocalDate;
+import java.math.BigDecimal;
 import java.util.UUID;
 
 public record CreateBatchEventRequest(
@@ -18,8 +21,17 @@ public record CreateBatchEventRequest(
         String tags,
         @NotNull UUID operationId,
         Integer populationDelta,
-        SexAllocation sexAllocation
+        SexAllocation sexAllocation,
+        Instant occurredAt,
+        @Valid SaleDetails saleDetails
 ) {
+    public record SaleDetails(
+            @jakarta.validation.constraints.DecimalMin(value = "0.01") BigDecimal amount,
+            String currency,
+            String buyer,
+            String reference
+    ) {}
+
     public record SexAllocation(Integer maleDelta, Integer femaleDelta, Integer unclassifiedDelta) {
         public boolean isComplete() {
             return maleDelta != null && femaleDelta != null && unclassifiedDelta != null;
@@ -55,5 +67,19 @@ public record CreateBatchEventRequest(
                                    Integer populationDelta) {
         this(eventDate, eventType, title, severityLabel, affectedCount, details, tags,
                 operationId, populationDelta, null);
+    }
+
+    public CreateBatchEventRequest(LocalDate eventDate,
+                                   EventType eventType,
+                                   String title,
+                                   String severityLabel,
+                                   int affectedCount,
+                                   String details,
+                                   String tags,
+                                   UUID operationId,
+                                   Integer populationDelta,
+                                   SexAllocation sexAllocation) {
+        this(eventDate, eventType, title, severityLabel, affectedCount, details, tags,
+                operationId, populationDelta, sexAllocation, null, null);
     }
 }

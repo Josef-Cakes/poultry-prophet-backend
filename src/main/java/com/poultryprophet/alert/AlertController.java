@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.poultryprophet.alert.dto.AcknowledgeRequest;
 import com.poultryprophet.alert.dto.AlertResponse;
+import com.poultryprophet.common.PageResponse;
 import com.poultryprophet.security.CustomUserDetails;
 
 @RestController
@@ -31,6 +32,22 @@ public class AlertController {
                                            @RequestParam(defaultValue = "100") int limit,
                                            @AuthenticationPrincipal CustomUserDetails principal) {
         return alertService.listForFarm(principal.getFarmId(), activeOnly, limit);
+    }
+
+    @GetMapping("/alerts/page")
+    public PageResponse<AlertResponse> pageForFarm(@RequestParam(defaultValue = "true") boolean activeOnly,
+                                                   @RequestParam(required = false) Severity severity,
+                                                   @RequestParam(required = false) Long batchId,
+                                                   @RequestParam(defaultValue = "priority") String sort,
+                                                   @RequestParam(defaultValue = "0") int page,
+                                                   @RequestParam(defaultValue = "20") int size,
+                                                   @AuthenticationPrincipal CustomUserDetails principal) {
+        return alertService.pageForFarm(principal.getFarmId(), activeOnly, severity, batchId, sort, page, size);
+    }
+
+    @GetMapping("/alerts/summary")
+    public AlertSummaryResponse summary(@AuthenticationPrincipal CustomUserDetails principal) {
+        return alertService.summaryForFarm(principal.getFarmId());
     }
 
     @GetMapping("/batches/{batchId}/alerts")

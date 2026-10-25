@@ -4,13 +4,19 @@ import com.poultryprophet.batch.BatchService;
 import com.poultryprophet.batch.Batch;
 import com.poultryprophet.common.BadRequestException;
 import com.poultryprophet.common.NotFoundException;
+import com.poultryprophet.common.PageResponse;
 import com.poultryprophet.finance.dto.*;
+import com.poultryprophet.event.dto.CreateBatchEventRequest;
 import com.poultryprophet.incubation.IncubationService;
 import com.poultryprophet.inventory.InventoryMovement;
 import com.poultryprophet.inventory.InventoryMovementRepository;
 import com.poultryprophet.inventory.InventoryMovementType;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
+import jakarta.persistence.criteria.Predicate;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -21,6 +27,9 @@ import java.time.temporal.ChronoUnit;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.ArrayList;
 
 @Service
 public class FinanceService {
@@ -38,14 +47,73 @@ public class FinanceService {
     @Transactional
     public FinancialTransactionResponse create(Long farmId, Long userId, CreateFinancialTransactionRequest req) {
         if (farmId == null) throw new BadRequestException("Join a farm first");
+        if (req.sourceOperationId() != null
+                || (req.sourceType() != null && !req.sourceType().isBlank()
+                && !"MANUAL".equalsIgnoreCase(req.sourceType().trim()))) {
+            throw new BadRequestException("Source metadata is managed by the system");
+        }
         validateParent(farmId, req.batchId(), req.incubationCycleId());
         FinancialTransaction tx = new FinancialTransaction();
         tx.setFarmId(farmId); tx.setBatchId(req.batchId()); tx.setIncubationCycleId(req.incubationCycleId());
         tx.setTransactionDate(req.transactionDate()); tx.setType(req.type()); tx.setCategory(req.category().trim());
         tx.setAmount(req.amount()); tx.setCurrency(req.currency() == null || req.currency().isBlank() ? "PHP" : req.currency().trim().toUpperCase());
         tx.setCounterparty(trim(req.counterparty())); tx.setDescription(trim(req.description())); tx.setEnteredBy(userId);
-        tx.setSourceType(req.sourceType() == null || req.sourceType().isBlank() ? "MANUAL" : req.sourceType().trim().toUpperCase());
-        tx.setSourceOperationId(req.sourceOperationId() == null ? null : req.sourceOperationId().toString());
+        tx.setSourceType("MANUAL");
+        tx.setSourceOperationId(null);
+        return FinancialTransactionResponse.from(repository.save(tx));
+    }
+
+    /** Creates the auditable income side of a sale event exactly once. */
+    @Transactional
+    public FinancialTransactionResponse createSaleIncome(Long farmId, Long userId, Long batchId,
+                                                         LocalDate transactionDate,
+                                                         CreateBatchEventRequest.SaleDetails sale,
+                                                         UUID operationId,
+                                                         Long sourceEventId) {
+        if (sale == null || sale.amount() == null || sale.amount().signum() <= 0) {
+            throw new BadRequestException("A sale amount is required when recording sale proceeds");
+        }
+        String sourceOperationId = operationId == null ? null : operationId.toString();
+        FinancialTransaction existing = sourceEventId == null ? null
+                : repository.findByFarmIdAndSourceEventId(farmId, sourceEventId).orElse(null);
+        if (existing == null && sourceOperationId != null) {
+            existing = repository.findByFarmIdAndSourceOperationId(farmId, sourceOperationId).orElse(null);
+        }
+        if (existing != null) {
+            if (!java.util.Objects.equals(existing.getBatchId(), batchId)
+                    || (existing.getSourceEventId() != null
+                    && !java.util.Objects.equals(existing.getSourceEventId(), sourceEventId))
+                    || !"SALE_EVENT".equalsIgnoreCase(existing.getSourceType())
+                    || existing.getType() != FinanceTransactionType.INCOME
+                    || existing.getStatus() != FinanceTransactionStatus.POSTED
+                    || existing.getAmount().compareTo(sale.amount()) != 0) {
+                throw new com.poultryprophet.common.ConflictException(
+                        "The sale is already linked to a different or voided financial transaction");
+            }
+            if (existing.getSourceEventId() == null && sourceEventId != null) {
+                existing.setSourceEventId(sourceEventId);
+                existing.setSourceType("SALE_EVENT");
+                repository.save(existing);
+            }
+            return FinancialTransactionResponse.from(existing);
+        }
+        batchService.requireWritableBatch(batchId, farmId);
+        FinancialTransaction tx = new FinancialTransaction();
+        tx.setFarmId(farmId);
+        tx.setBatchId(batchId);
+        tx.setTransactionDate(transactionDate);
+        tx.setType(FinanceTransactionType.INCOME);
+        tx.setCategory("Bird sale");
+        tx.setAmount(sale.amount());
+        tx.setCurrency(sale.currency() == null || sale.currency().isBlank()
+                ? "PHP" : sale.currency().trim().toUpperCase(java.util.Locale.ROOT));
+        tx.setCounterparty(trim(sale.buyer()));
+        tx.setDescription(trim(sale.reference()) == null ? "Sale proceeds from batch event"
+                : "Sale proceeds; reference " + trim(sale.reference()));
+        tx.setSourceType("SALE_EVENT");
+        tx.setSourceEventId(sourceEventId);
+        tx.setSourceOperationId(sourceOperationId);
+        tx.setEnteredBy(userId);
         return FinancialTransactionResponse.from(repository.save(tx));
     }
 
@@ -57,12 +125,38 @@ public class FinanceService {
         return values.stream().map(FinancialTransactionResponse::from).toList();
     }
 
+    @Transactional(readOnly = true)
+    public PageResponse<FinancialTransactionResponse> page(Long farmId, LocalDate start, LocalDate end,
+                                                            Long batchId, Boolean farmWide,
+                                                            FinanceTransactionType type, int page, int size) {
+        return page(farmId, start, end, batchId, farmWide, type, null, null, null, page, size);
+    }
+
+    @Transactional(readOnly = true)
+    public PageResponse<FinancialTransactionResponse> page(Long farmId, LocalDate start, LocalDate end,
+                                                            Long batchId, Boolean farmWide,
+                                                            FinanceTransactionType type, String category,
+                                                            String sourceType, FinanceTransactionStatus status,
+                                                            int page, int size) {
+        if (farmId == null) throw new BadRequestException("Join a farm first");
+        int safePage = Math.max(0, page);
+        int safeSize = Math.max(1, Math.min(size, 50));
+        Specification<FinancialTransaction> specification = transactionSpecification(farmId, start, end, batchId,
+                farmWide, type, category, sourceType, status);
+        return PageResponse.from(repository.findAll(specification, PageRequest.of(safePage, safeSize,
+                Sort.by(Sort.Order.desc("transactionDate"), Sort.Order.desc("createdAt"), Sort.Order.desc("id")))),
+                FinancialTransactionResponse::from);
+    }
+
     @Transactional
     public FinancialTransactionResponse voidTransaction(Long id, Long farmId, String reason) {
         FinancialTransaction tx = repository.findByIdAndFarmId(id, farmId)
                 .orElseThrow(() -> new NotFoundException("Financial transaction " + id + " not found"));
         if (tx.getBatchId() != null) batchService.requireWritableBatch(tx.getBatchId(), farmId);
         if (tx.getStatus() == FinanceTransactionStatus.VOIDED) throw new BadRequestException("Transaction is already voided");
+        if ("SALE_EVENT".equalsIgnoreCase(tx.getSourceType())) {
+            throw new BadRequestException("Sale income must be corrected through the linked sale correction workflow");
+        }
         tx.setStatus(FinanceTransactionStatus.VOIDED); tx.setVoidReason(trim(reason));
         return FinancialTransactionResponse.from(repository.save(tx));
     }
@@ -80,6 +174,40 @@ public class FinanceService {
 
     @Transactional(readOnly = true)
     public FinanceAnalyticsResponse analytics(Long farmId, Long batchId, LocalDate start, LocalDate end) {
+        return analytics(farmId, batchId, start, end, null, false);
+    }
+
+    @Transactional(readOnly = true)
+    public FinanceAnalyticsResponse analytics(Long farmId, Long batchId, LocalDate start, LocalDate end,
+                                              FinanceTransactionType type, boolean farmWide) {
+        return analytics(farmId, batchId, start, end, type, farmWide, null, null, null);
+    }
+
+    @Transactional(readOnly = true)
+    public FinanceAnalyticsResponse analytics(Long farmId, Long batchId, LocalDate start, LocalDate end,
+                                              FinanceTransactionType type, boolean farmWide, String category,
+                                              String sourceType, FinanceTransactionStatus status) {
+        return analyticsInternal(farmId, batchId, start, end, type, farmWide, category, sourceType, status,
+                null, false);
+    }
+
+    /**
+     * Calculates the farm-level financial snapshot for another analytics view.
+     * The supplied batch IDs preserve validation/origin filtering while still
+     * including general farm records. Finance remains the single calculation
+     * path for both the full Finance page and the Farm Overview preview.
+     */
+    @Transactional(readOnly = true)
+    public FinanceAnalyticsResponse analyticsForFarmScope(Long farmId, Set<Long> includedBatchIds,
+                                                           LocalDate start, LocalDate end) {
+        return analyticsInternal(farmId, null, start, end, null, false, null, null, null,
+                includedBatchIds, true);
+    }
+
+    private FinanceAnalyticsResponse analyticsInternal(Long farmId, Long batchId, LocalDate start, LocalDate end,
+                                                       FinanceTransactionType type, boolean farmWide, String category,
+                                                       String sourceType, FinanceTransactionStatus status,
+                                                       Set<Long> includedBatchIds, boolean includeGeneralFarmRecords) {
         LocalDate effectiveEnd = end == null ? LocalDate.now() : end;
         LocalDate effectiveStart;
         String scope;
@@ -88,27 +216,31 @@ public class FinanceService {
 
         if (batchId != null) {
             Batch batch = batchService.requireBatch(batchId, farmId);
-            effectiveStart = start == null ? batch.getStartDate() : start;
+            effectiveStart = start == null ? batch.getHatchDate() : start;
             scope = "BATCH";
             batchName = batch.getName();
-            values = repository.findByFarmIdAndBatchIdAndTransactionDateBetweenOrderByTransactionDateAsc(
-                    farmId, batchId, effectiveStart, effectiveEnd);
         } else {
             effectiveStart = start == null ? effectiveEnd.minusMonths(12) : start;
             scope = "FARM";
-            values = repository.findByFarmIdAndTransactionDateBetweenOrderByTransactionDateAsc(
-                    farmId, effectiveStart, effectiveEnd);
         }
 
         if (effectiveStart.isAfter(effectiveEnd)) {
             throw new BadRequestException("Start date cannot be after end date");
         }
 
+        Specification<FinancialTransaction> specification = transactionSpecification(farmId, effectiveStart,
+                effectiveEnd, batchId, farmWide, type, category, sourceType, status,
+                includedBatchIds, includeGeneralFarmRecords);
+        values = repository.findAll(specification, Sort.by(Sort.Order.asc("transactionDate"),
+                Sort.Order.asc("createdAt"), Sort.Order.asc("id")));
+
         long spanDays = ChronoUnit.DAYS.between(effectiveStart, effectiveEnd) + 1;
         Map<LocalDate, BigDecimal> incomeByBucket = new LinkedHashMap<>();
         Map<LocalDate, BigDecimal> expenseByBucket = new LinkedHashMap<>();
         Map<String, BigDecimal> expenseByCategory = new LinkedHashMap<>();
         BigDecimal income = BigDecimal.ZERO;
+        BigDecimal saleIncome = BigDecimal.ZERO;
+        long saleTransactionCount = 0;
         BigDecimal expense = BigDecimal.ZERO;
         long postedCount = 0;
         long voidedCount = 0;
@@ -123,6 +255,10 @@ public class FinanceService {
             LocalDate bucket = bucketStart(tx.getTransactionDate(), spanDays);
             if (tx.getType() == FinanceTransactionType.INCOME) {
                 income = income.add(tx.getAmount());
+                if ("SALE_EVENT".equalsIgnoreCase(tx.getSourceType())) {
+                    saleIncome = saleIncome.add(tx.getAmount());
+                    saleTransactionCount++;
+                }
                 incomeByBucket.merge(bucket, tx.getAmount(), BigDecimal::add);
             } else {
                 if (batchId != null && "INVENTORY_PURCHASE".equalsIgnoreCase(tx.getSourceType())) continue;
@@ -160,7 +296,7 @@ public class FinanceService {
         String currency = values.stream().map(FinancialTransaction::getCurrency).filter(value -> value != null && !value.isBlank())
                 .findFirst().orElse("PHP");
         String limitation = batchId == null
-                ? "Farm view includes batch-linked and farm-wide records."
+                ? "Farm view includes batch-linked and general farm records."
                 : "Batch view includes only transactions linked to this batch; farm-wide costs are excluded.";
         BigDecimal productsConsumed = BigDecimal.ZERO;
         boolean productCostComplete = true;
@@ -176,9 +312,48 @@ public class FinanceService {
         }
         BigDecimal totalRecordedBatchCost = expense.add(productsConsumed);
         return new FinanceAnalyticsResponse(scope, batchId, batchName, effectiveStart, effectiveEnd, currency,
-                new FinanceAnalyticsResponse.Totals(income, expense, income.subtract(expense), productsConsumed,
-                        totalRecordedBatchCost, income.subtract(totalRecordedBatchCost), productCostComplete, postedCount, voidedCount),
+                new FinanceAnalyticsResponse.Totals(income, saleIncome, income.subtract(saleIncome), saleTransactionCount,
+                        expense, income.subtract(expense), productsConsumed, totalRecordedBatchCost,
+                        income.subtract(totalRecordedBatchCost), productCostComplete, postedCount, voidedCount),
                 series, categoryTotals, new FinanceAnalyticsResponse.Limitations(batchId != null, limitation));
+    }
+
+    private Specification<FinancialTransaction> transactionSpecification(Long farmId, LocalDate start, LocalDate end,
+                                                                          Long batchId, Boolean farmWide,
+                                                                          FinanceTransactionType type, String category,
+                                                                          String sourceType, FinanceTransactionStatus status) {
+        return transactionSpecification(farmId, start, end, batchId, farmWide, type, category, sourceType, status,
+                null, false);
+    }
+
+    private Specification<FinancialTransaction> transactionSpecification(Long farmId, LocalDate start, LocalDate end,
+                                                                          Long batchId, Boolean farmWide,
+                                                                          FinanceTransactionType type, String category,
+                                                                          String sourceType, FinanceTransactionStatus status,
+                                                                          Set<Long> includedBatchIds,
+                                                                          boolean includeGeneralFarmRecords) {
+        return (root, query, cb) -> {
+            List<Predicate> predicates = new ArrayList<>();
+            predicates.add(cb.equal(root.get("farmId"), farmId));
+            if (start != null) predicates.add(cb.greaterThanOrEqualTo(root.get("transactionDate"), start));
+            if (end != null) predicates.add(cb.lessThanOrEqualTo(root.get("transactionDate"), end));
+            if (includedBatchIds != null) {
+                List<Predicate> scopePredicates = new ArrayList<>();
+                if (!includedBatchIds.isEmpty()) scopePredicates.add(root.get("batchId").in(includedBatchIds));
+                if (includeGeneralFarmRecords) scopePredicates.add(cb.isNull(root.get("batchId")));
+                predicates.add(scopePredicates.isEmpty()
+                        ? cb.disjunction()
+                        : cb.or(scopePredicates.toArray(Predicate[]::new)));
+            } else {
+                if (batchId != null) predicates.add(cb.equal(root.get("batchId"), batchId));
+                if (Boolean.TRUE.equals(farmWide)) predicates.add(cb.isNull(root.get("batchId")));
+            }
+            if (type != null) predicates.add(cb.equal(root.get("type"), type));
+            if (status != null) predicates.add(cb.equal(root.get("status"), status));
+            if (category != null && !category.isBlank()) predicates.add(cb.equal(root.get("category"), category.trim()));
+            if (sourceType != null && !sourceType.isBlank()) predicates.add(cb.equal(root.get("sourceType"), sourceType.trim()));
+            return cb.and(predicates.toArray(Predicate[]::new));
+        };
     }
 
     private LocalDate bucketStart(LocalDate date, long spanDays) {

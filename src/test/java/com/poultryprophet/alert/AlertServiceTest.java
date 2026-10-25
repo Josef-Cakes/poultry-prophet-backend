@@ -5,6 +5,7 @@ import com.poultryprophet.analytics.ThresholdConfigRepository;
 import com.poultryprophet.batch.Batch;
 import com.poultryprophet.batch.BatchRepository;
 import com.poultryprophet.batch.BatchService;
+import com.poultryprophet.common.BadRequestException;
 import com.poultryprophet.event.BatchEvent;
 import com.poultryprophet.event.BatchEventRepository;
 import com.poultryprophet.event.EventType;
@@ -18,11 +19,16 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 
 import java.time.LocalDate;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -113,6 +119,40 @@ class AlertServiceTest {
         ArgumentCaptor<Alert> captor = ArgumentCaptor.forClass(Alert.class);
         verify(alertRepository).save(captor.capture());
         assertThat(captor.getValue().getSeverity()).isEqualTo(Severity.CRITICAL);
+    }
+
+    @Test
+    void priorityPaginationUsesCriteriaOrderingInsteadOfUnsafePropertySorting() {
+        when(alertRepository.findAll(any(Specification.class), any(Pageable.class)))
+                .thenReturn(Page.empty());
+
+        service.pageForFarm(7L, true, null, null, "priority", 0, 20);
+
+        ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
+        verify(alertRepository).findAll(any(Specification.class), pageable.capture());
+        assertThat(pageable.getValue().getSort().isUnsorted()).isTrue();
+    }
+
+    @Test
+    void newestPaginationUsesStableEntityProperties() {
+        when(alertRepository.findAll(any(Specification.class), any(Pageable.class)))
+                .thenReturn(Page.empty());
+
+        service.pageForFarm(7L, true, null, null, "newest", 0, 20);
+
+        ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
+        verify(alertRepository).findAll(any(Specification.class), pageable.capture());
+        assertThat(pageable.getValue().getSort().getOrderFor("createdAt").getDirection())
+                .isEqualTo(Sort.Direction.DESC);
+        assertThat(pageable.getValue().getSort().getOrderFor("id").getDirection())
+                .isEqualTo(Sort.Direction.DESC);
+    }
+
+    @Test
+    void rejectsUnknownAlertSort() {
+        assertThatThrownBy(() -> service.pageForFarm(7L, true, null, null, "oldest", 0, 20))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessage("Alert sort must be priority or newest");
     }
 
     private static Batch batch(int currentPopulation) {

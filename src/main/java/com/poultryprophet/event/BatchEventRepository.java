@@ -2,6 +2,7 @@ package com.poultryprophet.event;
 
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -11,7 +12,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-public interface BatchEventRepository extends JpaRepository<BatchEvent, Long> {
+public interface BatchEventRepository extends JpaRepository<BatchEvent, Long>, JpaSpecificationExecutor<BatchEvent> {
 
     List<BatchEvent> findByBatchIdOrderByEventDateDescCreatedAtDesc(Long batchId, Pageable pageable);
 
