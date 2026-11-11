@@ -28,6 +28,12 @@ class RefreshTokenServiceTest {
     @Mock private UserRepository userRepository;
 
     @Test
+    void defaultsToASixtyDayRefreshLifetime() {
+        assertThat(new SecurityProperties().getRefreshTokenExpirationMs())
+                .isEqualTo(60L * 24 * 60 * 60 * 1000);
+    }
+
+    @Test
     void issuesAHighEntropyTokenAndStoresOnlyItsHash() {
         SecurityProperties properties = properties();
         RefreshTokenService service = new RefreshTokenService(tokenRepository, userRepository, properties);
@@ -39,7 +45,8 @@ class RefreshTokenServiceTest {
         RefreshTokenService.IssuedToken issued = service.issue(user);
 
         assertThat(issued.rawToken()).hasSizeGreaterThan(80);
-        assertThat(issued.expiresAt()).isAfter(Instant.now());
+        assertThat(issued.expiresAt()).isAfter(Instant.now().plusSeconds(59L * 24 * 60 * 60));
+        assertThat(issued.expiresAt()).isBefore(Instant.now().plusSeconds(61L * 24 * 60 * 60));
         assertThat(saved.getValue().getUserId()).isEqualTo(7L);
         assertThat(saved.getValue().getTokenHash()).isNotEqualTo(issued.rawToken());
         assertThat(saved.getValue().getTokenHash()).hasSize(43);
@@ -80,7 +87,7 @@ class RefreshTokenServiceTest {
 
     private static SecurityProperties properties() {
         SecurityProperties properties = new SecurityProperties();
-        properties.setRefreshTokenExpirationMs(2_592_000_000L);
+        properties.setRefreshTokenExpirationMs(5_184_000_000L);
         return properties;
     }
 

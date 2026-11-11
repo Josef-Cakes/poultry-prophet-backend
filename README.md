@@ -146,7 +146,7 @@ curl -X POST localhost:8080/api/auth/refresh \
 
 The refresh response contains a new access token and a replacement refresh token. Replace
 both stored values after every successful refresh; refresh tokens are single-use and rotate
-to prevent replay. The 30-day lifetime can be changed with `REFRESH_TOKEN_EXPIRATION_MS`.
+to prevent replay. The 60-day lifetime can be changed with `REFRESH_TOKEN_EXPIRATION_MS`.
 To sign out, revoke the saved refresh token:
 
 ```bash

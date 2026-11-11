@@ -68,8 +68,8 @@ poultry:
     jwt-secret: ${JWT_SECRET}
     jwt-expiration-ms: ${JWT_EXPIRATION_MS:86400000}
     # Long-lived PWA login credential. It is rotated on every refresh and is
-    # revoked by the logout endpoint. Default: 30 days.
-    refresh-token-expiration-ms: ${REFRESH_TOKEN_EXPIRATION_MS:2592000000}
+    # revoked by the logout endpoint. Default: 60 days.
+    refresh-token-expiration-ms: ${REFRESH_TOKEN_EXPIRATION_MS:5184000000}
     allowed-origins: ${APP_ALLOWED_ORIGINS:http://localhost:3000}
   analytics:
     weights:

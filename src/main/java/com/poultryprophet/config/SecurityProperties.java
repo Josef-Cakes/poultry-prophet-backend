@@ -11,7 +11,7 @@ public class SecurityProperties {
 
     private String jwtSecret;
     private long jwtExpirationMs = 86_400_000L;
-    private long refreshTokenExpirationMs = 2_592_000_000L;
+    private long refreshTokenExpirationMs = 5_184_000_000L;
     private List<String> allowedOrigins = new ArrayList<>(List.of("http://localhost:3000"));
 
     public String getJwtSecret() {
