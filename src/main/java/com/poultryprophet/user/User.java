@@ -28,6 +28,9 @@ public class User {
     @Column(nullable = false)
     private String fullName;
 
+    @Column(name = "credential_version", nullable = false)
+    private long credentialVersion;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private Role role;
@@ -38,6 +41,14 @@ public class User {
 
     @Column(nullable = false, updatable = false)
     private Instant createdAt = Instant.now();
+
+    public long getCredentialVersion() {
+        return credentialVersion;
+    }
+
+    public void invalidateCredentials() {
+        credentialVersion = Math.incrementExact(credentialVersion);
+    }
 
     public Long getId() {
         return id;

@@ -7,6 +7,8 @@
     import com.poultryprophet.farm.Farm;
     import com.poultryprophet.farm.FarmRepository;
     import com.poultryprophet.security.JwtService;
+    import com.poultryprophet.security.CustomUserDetails;
+    import org.springframework.security.core.Authentication;
     import com.poultryprophet.user.User;
     import com.poultryprophet.user.UserRepository;
     import com.poultryprophet.user.Role;
@@ -62,14 +64,14 @@
         }
 
         public AuthResponse login(LoginRequest request) {
+            Authentication authentication;
             try {
-                authenticationManager.authenticate(
+                authentication = authenticationManager.authenticate(
                         new UsernamePasswordAuthenticationToken(request.email(), request.password()));
             } catch (AuthenticationException ex) {
                 throw new BadCredentialsException("Invalid email or password");
             }
-            User user = userRepository.findByEmail(request.email())
-                    .orElseThrow(() -> new BadCredentialsException("Invalid email or password"));
+            User user = ((CustomUserDetails) authentication.getPrincipal()).getUser();
             return toResponse(user);
         }
 

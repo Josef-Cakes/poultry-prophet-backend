@@ -393,7 +393,8 @@ public class TaskService {
     @Transactional
     public TaskResponse updateStatus(Long id, Long farmId, Long actorId, boolean manager,
                                      UpdateTaskStatusRequest request) {
-        HandlerTask task = require(id, farmId);
+        HandlerTask task = taskRepository.findByIdAndFarmIdForUpdate(id, farmId)
+                .orElseThrow(() -> new NotFoundException("Task " + id + " not found"));
         if (manager && request.status() == TaskStatus.COMPLETED) {
             throw new BadRequestException("Managers monitor tasks; handlers complete them");
         }
@@ -411,6 +412,10 @@ public class TaskService {
         }
         if (request.status() == TaskStatus.COMPLETED && task.getStatus() == TaskStatus.COMPLETED) {
             throw new ConflictException("Task was already completed by another handler");
+        }
+        if (!manager && (request.status() == TaskStatus.CANCELLED
+                || task.getStatus() == TaskStatus.COMPLETED || task.getStatus() == TaskStatus.CANCELLED)) {
+            throw new BadRequestException("Only a manager can cancel or reopen a task");
         }
         if (task.getBatchId() != null) batchService.requireWritableBatch(task.getBatchId(), farmId);
         if ("VACCINATION_PLAN".equals(task.getSourceType()) && request.status() == TaskStatus.COMPLETED) {

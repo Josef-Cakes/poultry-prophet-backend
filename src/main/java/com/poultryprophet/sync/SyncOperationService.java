@@ -4,6 +4,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.poultryprophet.common.BadRequestException;
 import com.poultryprophet.common.ConflictException;
 import com.poultryprophet.common.NotFoundException;
+import com.poultryprophet.record.DailyRecordService;
+import com.poultryprophet.record.dto.CreateRecordRequest;
+import org.springframework.jdbc.core.JdbcTemplate;
 import com.poultryprophet.event.BatchEventRepository;
 import com.poultryprophet.event.BatchEventService;
 import com.poultryprophet.event.dto.BatchEventResponse;
@@ -36,11 +39,14 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validator;
 import org.springframework.beans.factory.annotation.Autowired;
-import java.time.ZoneOffset;
+import java.time.Clock;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /** Versioned replay boundary for the browser outbox. */
 @Service
@@ -59,6 +65,10 @@ public class SyncOperationService {
     private final VaccinationService vaccinationService;
     private final TaskService taskService;
     private final OfflineSyncReceiptRepository receiptRepository;
+    private final Clock clock;
+    private final TransactionTemplate transactionTemplate;
+    private final DailyRecordService dailyRecordService;
+    private final JdbcTemplate jdbcTemplate;
 
     @Autowired
     public SyncOperationService(ObjectMapper objectMapper, BatchEventService eventService,
@@ -70,7 +80,9 @@ public class SyncOperationService {
                                 BatchSexCompositionService sexCompositionService,
                                 VaccinationService vaccinationService,
                                 TaskService taskService,
-                                OfflineSyncReceiptRepository receiptRepository) {
+                                OfflineSyncReceiptRepository receiptRepository,
+                                Clock clock, PlatformTransactionManager transactionManager,
+                                DailyRecordService dailyRecordService, JdbcTemplate jdbcTemplate) {
         this.objectMapper = objectMapper;
         this.eventService = eventService;
         this.inputService = inputService;
@@ -83,6 +95,10 @@ public class SyncOperationService {
         this.vaccinationService = vaccinationService;
         this.taskService = taskService;
         this.receiptRepository = receiptRepository;
+        this.clock = clock;
+        this.transactionTemplate = transactionManager == null ? null : new TransactionTemplate(transactionManager);
+        this.dailyRecordService = dailyRecordService;
+        this.jdbcTemplate = jdbcTemplate;
     }
 
     /** Compatibility constructor for focused sync tests that do not exercise sex or vaccination replay. */
@@ -93,7 +109,8 @@ public class SyncOperationService {
                                 BatchSelectionSessionRepository selectionSessionRepository,
                                 Validator validator) {
         this(objectMapper, eventService, inputService, eventRepository, inputRepository,
-                selectionSessionService, selectionSessionRepository, validator, null, null, null, null);
+                selectionSessionService, selectionSessionRepository, validator, null, null, null, null,
+                Clock.system(ZoneId.of("Asia/Manila")), null, null, null);
     }
 
     public SyncOperationsResponse sync(SyncOperationsRequest request, Long farmId, Long userId, Role role) {
@@ -102,17 +119,29 @@ public class SyncOperationService {
         }
         List<SyncOperationResult> results = new ArrayList<>();
         int applied = 0, conflicts = 0, rejected = 0, retryable = 0;
+        Set<Long> blockedBatches = new java.util.HashSet<>();
         for (SyncOperationRequest operation : request.operations()) {
+            if (blockedBatches.contains(operation.batchId())) {
+                results.add(SyncOperationResult.retryable(operation.operationId(), "An earlier record for this batch needs attention first."));
+                retryable++;
+                continue;
+            }
             try {
-                results.add(apply(operation, farmId, userId, role));
+                SyncOperationResult result = transactionTemplate == null
+                        ? apply(operation, farmId, userId, role)
+                        : transactionTemplate.execute(status -> apply(operation, farmId, userId, role));
+                results.add(java.util.Objects.requireNonNull(result));
                 applied++;
             } catch (ConflictException ex) {
+                blockedBatches.add(operation.batchId());
                 results.add(SyncOperationResult.conflict(operation.operationId(), ex.getMessage()));
                 conflicts++;
             } catch (BadRequestException | NotFoundException ex) {
+                blockedBatches.add(operation.batchId());
                 results.add(SyncOperationResult.rejected(operation.operationId(), ex.getMessage()));
                 rejected++;
             } catch (RuntimeException ex) {
+                blockedBatches.add(operation.batchId());
                 results.add(SyncOperationResult.retryable(operation.operationId(),
                         "The server could not finish this record yet."));
                 retryable++;
@@ -126,11 +155,12 @@ public class SyncOperationService {
             throw new BadRequestException("Unsupported offline operation schema version: " + operation.schemaVersion());
         }
         return switch (operation.entityType()) {
+            case "DAILY_RECORD" -> applyDailyRecord(operation, farmId, userId);
             case "BATCH_EVENT" -> {
                 CreateBatchEventRequest payload = readPayload(operation, CreateBatchEventRequest.class, "batch event");
                 if (payload.eventDate() == null) {
                     payload = new CreateBatchEventRequest(
-                            operation.occurredAt().atZone(ZoneOffset.UTC).toLocalDate(),
+                            operation.occurredAt().atZone(clock.getZone()).toLocalDate(),
                             payload.eventType(), payload.title(), payload.severityLabel(), payload.affectedCount(),
                             payload.details(), payload.tags(), payload.operationId(), payload.populationDelta(),
                             payload.sexAllocation(), payload.occurredAt() == null ? operation.occurredAt() : payload.occurredAt(),
@@ -224,6 +254,7 @@ public class SyncOperationService {
                             payload.notes(), payload.operationId());
                 }
                 if (!operation.operationId().equals(payload.operationId())) throw new BadRequestException("The operation ID does not match the vaccination payload");
+                validatePayload(payload, "vaccination record");
                 VaccinationPlanItemResponse saved = vaccinationService.record(planId, farmId, userId, role, payload);
                 yield SyncOperationResult.applied(operation.operationId(), saved.id());
             }
@@ -238,6 +269,7 @@ public class SyncOperationService {
                 if (action.equals("CREATE_AND_ASSIGN")) {
                     CreateVaccinationProgramRequest programPayload = objectMapper.convertValue(
                             operation.payload().path("program"), CreateVaccinationProgramRequest.class);
+                    validatePayload(programPayload, "vaccination program");
                     VaccinationProgramResponse created = vaccinationService.createProgram(farmId, userId, programPayload);
                     programId = created.id();
                     action = operation.payload().path("replace").asBoolean(false) ? "REPLACE" : "ASSIGN";
@@ -270,11 +302,22 @@ public class SyncOperationService {
             case "TASK_STATUS" -> {
                 long taskId = operation.payload().path("taskId").asLong(0);
                 if (taskId <= 0) throw new BadRequestException("Task sync payload is missing taskId");
-                UpdateTaskStatusRequest payload = objectMapper.convertValue(operation.payload(), UpdateTaskStatusRequest.class);
-                if (payload.operationId() == null || !operation.operationId().equals(payload.operationId())) {
+                var taskPayload = operation.payload().deepCopy();
+                if (taskPayload instanceof com.fasterxml.jackson.databind.node.ObjectNode object) object.remove("taskId");
+                UpdateTaskStatusRequest payload;
+                try {
+                    payload = objectMapper.convertValue(taskPayload, UpdateTaskStatusRequest.class);
+                } catch (IllegalArgumentException ex) {
+                    throw new BadRequestException("Invalid task status payload");
+                }
+                if (payload.operationId() != null && !operation.operationId().equals(payload.operationId())) {
+                    throw new BadRequestException("The operation ID does not match the task status payload");
+                }
+                if (payload.operationId() == null) {
                     payload = new UpdateTaskStatusRequest(payload.status(), payload.note(), operation.operationId(),
                             payload.occurredAt() == null ? operation.occurredAt() : payload.occurredAt());
                 }
+                validatePayload(payload, "task status");
                 TaskResponse saved = taskService.updateStatus(taskId, farmId, userId, role == Role.MANAGER, payload);
                 yield SyncOperationResult.applied(operation.operationId(), saved.id());
             }
@@ -286,6 +329,54 @@ public class SyncOperationService {
         if (role != Role.MANAGER) {
             throw new BadRequestException("Only farm managers can sync selection sessions");
         }
+    }
+
+    private SyncOperationResult applyDailyRecord(SyncOperationRequest operation, Long farmId, Long userId) {
+        if (!(operation.payload() instanceof ObjectNode original)
+                || !operation.operationId().toString().equals(original.path("operationId").asText())) {
+            throw new BadRequestException("The operation ID does not match the measurement payload");
+        }
+        if (!original.path("ownerUserId").isIntegralNumber() || !original.path("ownerUserId").canConvertToLong()
+                || !original.path("ownerFarmId").isIntegralNumber() || !original.path("ownerFarmId").canConvertToLong()
+                || original.path("ownerUserId").asLong() != userId || original.path("ownerFarmId").asLong() != farmId) {
+            throw new ConflictException("This measurement belongs to another user or farm.");
+        }
+        ObjectNode data = original.deepCopy();
+        data.remove("operationId");
+        data.remove("ownerUserId");
+        data.remove("ownerFarmId");
+        CreateRecordRequest payload;
+        try {
+            payload = objectMapper.treeToValue(data, CreateRecordRequest.class);
+        } catch (Exception ex) {
+            throw new BadRequestException("Invalid daily measurement payload");
+        }
+        validatePayload(payload, "daily measurement");
+        if (payload.recordDate() == null) throw new BadRequestException("A measurement date is required for offline sync");
+        if (payload.temperatureC() == null && payload.feedIntakeG() == null && payload.waterIntakeMl() == null
+                && payload.mortalityCount() == null && (payload.behaviorNotes() == null || payload.behaviorNotes().isBlank())) {
+            throw new BadRequestException("Enter at least one measurement or note");
+        }
+
+        // PostgreSQL waits for a concurrent owner of this key before deciding whether
+        // the insert succeeded. The receipt and record commit or roll back together.
+        String json = original.toString();
+        java.sql.Timestamp occurred = java.sql.Timestamp.from(operation.occurredAt());
+        int inserted = jdbcTemplate.update("INSERT INTO offline_daily_record_receipt "
+                        + "(operation_id, farm_id, user_id, batch_id, occurred_at, payload) VALUES (?, ?, ?, ?, ?, CAST(? AS jsonb)) "
+                        + "ON CONFLICT (operation_id) DO NOTHING",
+                operation.operationId(), farmId, userId, operation.batchId(), occurred, json);
+        if (inserted == 0) {
+            List<Long> matching = jdbcTemplate.query("SELECT server_id FROM offline_daily_record_receipt "
+                            + "WHERE operation_id = ? AND farm_id = ? AND user_id = ? AND batch_id = ? "
+                            + "AND occurred_at = ? AND payload = CAST(? AS jsonb) AND server_id IS NOT NULL",
+                    (rs, row) -> rs.getLong(1), operation.operationId(), farmId, userId, operation.batchId(), occurred, json);
+            if (matching.isEmpty()) throw new ConflictException("This operation ID was already used for a different measurement.");
+            return SyncOperationResult.alreadyApplied(operation.operationId(), matching.getFirst());
+        }
+        var saved = dailyRecordService.recordOffline(operation.batchId(), farmId, payload, userId);
+        jdbcTemplate.update("UPDATE offline_daily_record_receipt SET server_id = ? WHERE operation_id = ?", saved.id(), operation.operationId());
+        return SyncOperationResult.applied(operation.operationId(), saved.id());
     }
 
     private <T> T readPayload(SyncOperationRequest operation, Class<T> payloadType, String label) {
@@ -301,6 +392,7 @@ public class SyncOperationService {
     }
 
     private <T> void validatePayload(T payload, String label) {
+        if (payload == null) throw new BadRequestException("Invalid " + label + " payload");
         Set<ConstraintViolation<T>> violations = validator.validate(payload);
         if (!violations.isEmpty()) {
             throw new BadRequestException("Invalid " + label + " payload");

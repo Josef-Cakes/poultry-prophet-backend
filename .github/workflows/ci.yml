@@ -1,0 +1,35 @@
+name: Backend checks
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: poultry_validation
+          POSTGRES_PASSWORD: local-disposable-only
+          POSTGRES_DB: poultry_prophet_validation
+        ports:
+          - 25432:5432
+        options: >-
+          --health-cmd "pg_isready -U poultry_validation -d poultry_prophet_validation"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - run: chmod +x mvnw
+      - run: python3 scripts/check-migration-track.py
+      - run: python3 -m unittest scripts/test-migration-track.py
+      - name: Prepare disposable receipt table
+        run: docker exec -i ${{ job.services.postgres.id }} psql -v ON_ERROR_STOP=1 -U poultry_validation -d poultry_prophet_validation < src/main/resources/db/reviewed-migration/V27__offline_daily_record_receipts.sql
+      - run: ./mvnw --batch-mode test
+        env:
+          POULTRY_DISPOSABLE_DB_URL: jdbc:postgresql://127.0.0.1:25432/poultry_prophet_validation

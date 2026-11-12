@@ -22,10 +22,10 @@ require_env VALIDATION_HANDLER_PASSWORD
 MANAGER_PASSWORD="$VALIDATION_MANAGER_PASSWORD"
 HANDLER_PASSWORD="$VALIDATION_HANDLER_PASSWORD"
 
-case "$API_BASE" in
-  http://localhost:*|http://127.0.0.1:*) ;;
-  *) echo "Refusing a non-local validation API URL: $API_BASE" >&2; exit 1 ;;
-esac
+if [[ ! "$API_BASE" =~ ^http://(localhost|127\.0\.0\.1):[0-9]+/api$ ]]; then
+  echo "Refusing a non-local validation API URL: $API_BASE" >&2
+  exit 1
+fi
 
 case "$API_BASE" in
   *vercel.app*|*render.com*|*supabase.co*)
@@ -38,6 +38,12 @@ require_command() { command -v "$1" >/dev/null || { echo "Missing required comma
 require_command curl
 require_command jq
 require_command uuidgen
+
+version_json=$(curl -fsS "$API_BASE/version")
+if ! jq -e '.application == "poultry-prophet-backend" and .environment == "validation"' <<<"$version_json" >/dev/null; then
+  echo "Refusing to seed: the backend did not identify itself as the validation environment." >&2
+  exit 1
+fi
 
 login_payload=$(jq -nc --arg email "$MANAGER_EMAIL" --arg password "$MANAGER_PASSWORD" \
   '{email:$email,password:$password}')

@@ -11,7 +11,11 @@ This checklist is for a separately approved deployment after validation. No prod
 - [ ] Set `NEXT_PUBLIC_APP_VERSION`, `NEXT_PUBLIC_APP_ENVIRONMENT`, `NEXT_PUBLIC_BACKEND_VERSION`, and the production API URL explicitly.
 - [ ] Use a production-only JWT secret and a reviewed CORS allowlist; never use `*` with credentials.
 - [ ] Back up the production database and verify restore access.
-- [ ] Review `V3__validation_ledger_and_explainable_indicators.sql` against the actual schema. Apply it through the approved migration process only; do not run the validation reset/seed scripts.
+- [ ] Follow the [migration runbook](migrations/README.md): verify the actual schema and
+  migration history, reconcile both V15 changes, and review a database-specific baseline plan.
+  Do not replay legacy SQL or use validation reset/seed scripts in production.
+- [ ] Confirm normal startup uses Hibernate `validate`, SQL initialization `never`, and Flyway
+  disabled until the reviewed track and baseline are approved. A schema mismatch blocks startup.
 - [ ] Confirm no synthetic account, validation database URL, or test data is configured in production.
 
 ## Smoke tests after deployment

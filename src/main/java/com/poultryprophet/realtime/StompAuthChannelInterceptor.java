@@ -6,6 +6,12 @@ import com.poultryprophet.user.UserRepository;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageChannel;
 import org.springframework.messaging.simp.stomp.StompCommand;
+import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
+import org.springframework.messaging.simp.SimpMessageType;
+import org.springframework.context.event.EventListener;
+import org.springframework.web.socket.messaging.SessionDisconnectEvent;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.Map;
 import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.messaging.support.ChannelInterceptor;
 import org.springframework.messaging.support.MessageHeaderAccessor;
@@ -24,6 +30,7 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
 
     private final JwtService jwtService;
     private final UserRepository userRepository;
+    private final Map<String, FarmScopedPrincipal> sessions = new ConcurrentHashMap<>();
     private static final Pattern FARM_TOPIC =
             Pattern.compile("^/topic/farms/(\\d+)/(alerts|indicators)$");
     private static final Pattern FARM_APP_DESTINATION =
@@ -48,15 +55,13 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
                 return null;
             }
             String token = authorization.substring(7);
-            if (!jwtService.isValid(token)) {
-                return null;
-            }
-            String email = jwtService.extractEmail(token);
-            User user = userRepository.findByEmail(email).orElse(null);
+            User user = authenticatedUser(token);
             if (user == null || user.getFarmId() == null) {
                 return null;
             }
-            accessor.setUser(new FarmScopedPrincipal(email, user.getFarmId()));
+            FarmScopedPrincipal principal = new FarmScopedPrincipal(user.getEmail(), user.getFarmId(), token);
+            accessor.setUser(principal);
+            if (accessor.getSessionId() != null) sessions.put(accessor.getSessionId(), principal);
         }
 
         if (StompCommand.SUBSCRIBE.equals(accessor.getCommand())) {
@@ -72,8 +77,27 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
         return message;
     }
 
+    public Message<?> preSendOutbound(Message<?> message) {
+        SimpMessageHeaderAccessor accessor = MessageHeaderAccessor.getAccessor(message, SimpMessageHeaderAccessor.class);
+        if (accessor == null || accessor.getMessageType() != SimpMessageType.MESSAGE) return message;
+        if (accessor.getSessionId() == null) return null;
+        FarmScopedPrincipal principal = sessions.get(accessor.getSessionId());
+        if (principal == null) return null;
+        User user = authenticatedUser(principal.token());
+        return user != null && principal.farmId().equals(user.getFarmId()) ? message : null;
+    }
+
+    @EventListener
+    public void onDisconnect(SessionDisconnectEvent event) {
+        sessions.remove(event.getSessionId());
+    }
+
     private boolean isOwnedFarmDestination(StompHeaderAccessor accessor, Pattern pattern) {
         if (!(accessor.getUser() instanceof FarmScopedPrincipal principal)) {
+            return false;
+        }
+        User user = authenticatedUser(principal.token());
+        if (user == null || !principal.farmId().equals(user.getFarmId())) {
             return false;
         }
         String destination = accessor.getDestination();
@@ -88,7 +112,22 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
         }
     }
 
-    private record FarmScopedPrincipal(String name, Long farmId) implements Principal {
+    private User authenticatedUser(String token) {
+        try {
+            JwtService.TokenIdentity identity = jwtService.identity(token);
+            User user = userRepository.findById(identity.userId()).orElse(null);
+            return user != null && user.getCredentialVersion() == identity.credentialVersion() ? user : null;
+        } catch (io.jsonwebtoken.JwtException | IllegalArgumentException ex) {
+            return null;
+        }
+    }
+
+    private record FarmScopedPrincipal(String name, Long farmId, String token) implements Principal {
+        @Override
+        public String toString() {
+            return name;
+        }
+
         @Override
         public String getName() {
             return name;

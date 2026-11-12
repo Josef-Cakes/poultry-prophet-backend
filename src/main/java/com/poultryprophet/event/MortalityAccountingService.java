@@ -104,10 +104,7 @@ public class MortalityAccountingService {
                         || (existing.getTags() != null && !java.util.Objects.equals(existing.getTags(), request.tags()))) {
                     throw new ConflictException("operationId has already been used for a different population event");
                 }
-                return new MortalityAccountingResult(existing,
-                        existing.getPopulationAfter() != null
-                                ? existing.getPopulationAfter()
-                                : batch.getCurrentPopulation());
+                return new MortalityAccountingResult(existing, batch.getCurrentPopulation());
             }
         }
 
@@ -188,7 +185,22 @@ public class MortalityAccountingService {
         BatchEvent saved = eventRepository.save(event);
         int remainingPopulation = Math.toIntExact((long) batch.getCurrentPopulation() + delta);
         batch.setCurrentPopulation(remainingPopulation);
-        event.setPopulationAfter(remainingPopulation);
+        LocalDate end = dateValidation.today();
+        if (end == null || end.isBefore(date)) end = date;
+        List<BatchEvent> following = eventRepository
+                .findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(batch.getId(), date, end)
+                .stream().filter(other -> other != saved && (saved.getId() == null || !saved.getId().equals(other.getId())))
+                .filter(other -> other.getEventDate().isAfter(date)
+                        || (other.getEventDate().equals(date) && other.getCreatedAt() != null
+                            && saved.getCreatedAt() != null && other.getCreatedAt().isAfter(saved.getCreatedAt())))
+                .toList();
+        long laterDelta = following.stream().mapToLong(populationProjectionService::effectiveDelta).sum();
+        saved.setPopulationAfter(Math.toIntExact((long) remainingPopulation - laterDelta));
+        for (BatchEvent later : following) {
+            if (later.getPopulationAfter() != null) {
+                later.setPopulationAfter(Math.toIntExact((long) later.getPopulationAfter() + delta));
+            }
+        }
         batchRepository.save(batch);
 
         if (event.getEventType().isHealthMortality()) {
@@ -295,7 +307,8 @@ public class MortalityAccountingService {
 
     private boolean sameSale(BatchEvent existing, CreateBatchEventRequest.SaleDetails sale) {
         if (sale == null) return existing.getSaleAmount() == null;
-        return java.util.Objects.equals(existing.getSaleAmount(), sale.amount())
+        return (existing.getSaleAmount() == null ? sale.amount() == null
+                    : sale.amount() != null && existing.getSaleAmount().compareTo(sale.amount()) == 0)
                 && java.util.Objects.equals(existing.getSaleCurrency(), normalizedCurrency(sale.currency()))
                 && java.util.Objects.equals(existing.getSaleBuyer(), trim(sale.buyer()))
                 && java.util.Objects.equals(existing.getSaleReference(), trim(sale.reference()));

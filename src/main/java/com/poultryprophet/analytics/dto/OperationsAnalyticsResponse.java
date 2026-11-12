@@ -1,11 +1,14 @@
 package com.poultryprophet.analytics.dto;
 
 import java.time.LocalDate;
+import java.util.List;
 
 public record OperationsAnalyticsResponse(LocalDate startDate, LocalDate endDate,
                                           IncubationAnalyticsResponse incubation,
                                           TaskAnalyticsResponse tasks,
                                           InputUsageAnalyticsResponse inputs,
                                           FinanceSummary finance) {
-    public record FinanceSummary(String currency, String income, String expense, String net, long transactionCount) {}
+    public record FinanceSummary(String currency, String income, String expense, String net, long transactionCount,
+                                 List<CurrencyTotal> byCurrency) {}
+    public record CurrencyTotal(String currency, String income, String expense, String net) {}
 }

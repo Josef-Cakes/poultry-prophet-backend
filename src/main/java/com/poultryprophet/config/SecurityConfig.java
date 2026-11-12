@@ -63,7 +63,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/auth/**").permitAll()
                         .requestMatchers("/api/version").permitAll()
                         .requestMatchers("/ws/**").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/health").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/health", "/api/health/ready").permitAll()
                         // Allow the internal ERROR forward so real 500s surface as 500s
                         // instead of being masked as a 403 when the chain re-evaluates /error.
                         .requestMatchers("/error").permitAll()

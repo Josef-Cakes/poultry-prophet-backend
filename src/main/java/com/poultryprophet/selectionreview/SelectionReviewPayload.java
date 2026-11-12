@@ -123,8 +123,15 @@ public record SelectionReviewPayload(
             BigDecimal recordedContribution,
             long postedTransactionCount,
             boolean recordsMayBeIncomplete,
-            String limitation
+            String limitation,
+            List<CurrencyTotal> currencyTotals
     ) {
+        public record CurrencyTotal(String currency, BigDecimal recordedIncome, BigDecimal saleIncome,
+                                    BigDecimal otherIncome, long saleTransactionCount, BigDecimal recordedExpense,
+                                    BigDecimal recordedNetCashFlow, BigDecimal productsConsumedCost,
+                                    BigDecimal totalRecordedBatchCost, BigDecimal recordedContribution,
+                                    long postedTransactionCount, boolean recordsMayBeIncomplete) {}
+
         /** Compatibility constructor for saved snapshots created before the sale breakdown. */
         public FinanceSummary(LocalDate startDate, LocalDate endDate, BigDecimal recordedIncome,
                               BigDecimal recordedExpense, BigDecimal recordedNetCashFlow,
@@ -133,7 +140,7 @@ public record SelectionReviewPayload(
                               boolean recordsMayBeIncomplete, String limitation) {
             this(startDate, endDate, recordedIncome, BigDecimal.ZERO, recordedIncome, 0L,
                     recordedExpense, recordedNetCashFlow, productsConsumedCost, totalRecordedBatchCost,
-                    recordedContribution, postedTransactionCount, recordsMayBeIncomplete, limitation);
+                    recordedContribution, postedTransactionCount, recordsMayBeIncomplete, limitation, null);
         }
     }
 

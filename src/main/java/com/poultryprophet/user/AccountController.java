@@ -30,8 +30,6 @@ public class AccountController {
     public AuthResponse updateProfile(@Valid @RequestBody UpdateProfileRequest request,
                                       @AuthenticationPrincipal CustomUserDetails principal) {
         User updated = userService.updateProfile(principal.getId(), request.fullName(), request.email());
-        // Email is the JWT subject, so reissue a token to keep the session valid
-        // after an email change.
         return authService.toResponse(updated);
     }
 

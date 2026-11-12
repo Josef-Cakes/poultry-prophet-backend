@@ -10,6 +10,12 @@ public record FarmProductResponse(
         BigDecimal averageUnitCost, BigDecimal inventoryValue, String currency, String valuationStatus,
         boolean lowStock, boolean allowFractionalQuantity, boolean active
 ) {
+    public FarmProductResponse forRole(com.poultryprophet.user.Role role) {
+        if (role == com.poultryprophet.user.Role.MANAGER) return this;
+        return new FarmProductResponse(id, farmId, productType, brandName, productName, packageDescription,
+                stockUnit, stockOnHand, reorderLevel, null, null, null, null, lowStock,
+                allowFractionalQuantity, active);
+    }
     public static FarmProductResponse from(FarmProduct product) {
         boolean low = product.getReorderLevel() != null
                 && product.getStockOnHand().compareTo(product.getReorderLevel()) <= 0;

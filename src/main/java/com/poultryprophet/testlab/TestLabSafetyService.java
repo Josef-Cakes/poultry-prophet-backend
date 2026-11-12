@@ -22,15 +22,21 @@ public class TestLabSafetyService {
 
     private final ReleaseProperties release;
     private final String datasourceUrl;
+    private final boolean explicitlyEnabled;
 
     public TestLabSafetyService(ReleaseProperties release,
-                                @Value("${spring.datasource.url:}") String datasourceUrl) {
+                                @Value("${spring.datasource.url:}") String datasourceUrl,
+                                @Value("${app.test-lab.enabled:false}") boolean explicitlyEnabled) {
         this.release = release;
         this.datasourceUrl = datasourceUrl;
+        this.explicitlyEnabled = explicitlyEnabled;
     }
 
     public TestLabStatusResponse status() {
         String environment = clean(release.getEnvironment());
+        if (!explicitlyEnabled) {
+            return disabled(environment, "Test Lab requires explicit opt-in for a disposable database.");
+        }
         if (!ALLOWED_ENVIRONMENTS.contains(environment)) {
             return disabled(environment, "Test Lab is disabled outside a local or validation environment.");
         }
@@ -39,9 +45,13 @@ public class TestLabSafetyService {
         if (host == null || !ALLOWED_DATABASE_HOSTS.contains(host.toLowerCase(Locale.ROOT))) {
             return disabled(environment, "Test Lab requires a database running on this computer.");
         }
+        String database = datasourceDatabase(datasourceUrl);
+        if (database == null || !(database.endsWith("_validation") || database.endsWith("_test"))) {
+            return disabled(environment, "Test Lab requires a disposable database ending in _validation or _test.");
+        }
 
         return new TestLabStatusResponse(true, environment,
-                "Local database verified. Generated records stay in a labelled test-copy batch.");
+                "Disposable database checks passed. Generated records stay in a labelled test-copy batch.");
     }
 
     public void requireEnabled() {
@@ -62,6 +72,16 @@ public class TestLabSafetyService {
         try {
             return URI.create(uriValue).getHost();
         } catch (IllegalArgumentException exception) {
+            return null;
+        }
+    }
+
+    private String datasourceDatabase(String value) {
+        try {
+            String uriValue = value.startsWith("jdbc:") ? value.substring(5) : value;
+            String path = URI.create(uriValue).getPath();
+            return path == null || !path.matches("/[A-Za-z0-9_]+") ? null : path.substring(1).toLowerCase(Locale.ROOT);
+        } catch (IllegalArgumentException | NullPointerException exception) {
             return null;
         }
     }

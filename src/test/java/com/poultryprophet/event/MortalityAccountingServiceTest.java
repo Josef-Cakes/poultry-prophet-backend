@@ -18,6 +18,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.LocalDate;
+import java.util.List;
 import java.time.ZoneId;
 import java.util.Optional;
 import java.util.UUID;
@@ -158,14 +159,17 @@ class MortalityAccountingServiceTest {
         service.record(10L, 7L, 21L,
                 new CreateBatchEventRequest(date, EventType.ACCIDENTAL_DEATH,
                         "Accidental death", null, 1, null, null, operationId, null));
+        assertThat(batch.getCurrentPopulation()).isEqualTo(54);
+        // A later event may have changed the current population since the original write.
+        batch.setCurrentPopulation(53);
         MortalityAccountingService.MortalityAccountingResult retry = service.record(
                 10L, 7L, 21L,
                 new CreateBatchEventRequest(date, EventType.ACCIDENTAL_DEATH,
                         "Accidental death", null, 1, null, null, operationId, null));
 
-        assertThat(batch.getCurrentPopulation()).isEqualTo(54);
+        assertThat(batch.getCurrentPopulation()).isEqualTo(53);
         assertThat(retry.event().getId()).isEqualTo(101L);
-        assertThat(retry.remainingPopulation()).isEqualTo(54);
+        assertThat(retry.remainingPopulation()).isEqualTo(53);
         verify(eventRepository).save(any(BatchEvent.class));
     }
 
@@ -213,6 +217,34 @@ class MortalityAccountingServiceTest {
                 .isInstanceOf(BadRequestException.class)
                 .hasMessage("Male + female + unclassified changes must equal the population change");
         verify(eventRepository, never()).save(any(BatchEvent.class));
+    }
+
+    @Test
+    void backdatedDeathUpdatesChronologicalSnapshotsButReturnsCurrentPopulation() {
+        LocalDate date = LocalDate.now(ZoneId.of("Asia/Manila")).minusDays(2);
+        LocalDate later = date.plusDays(1);
+        Batch batch = batch(53);
+        BatchEvent previous = new BatchEvent();
+        previous.setId(5L);
+        previous.setEventDate(later);
+        previous.setEventType(EventType.HEALTH_DEATH);
+        previous.setAffectedCount(2);
+        previous.setPopulationDelta(-2);
+        previous.setPopulationAfter(53);
+        when(dateValidation.resolve(date)).thenReturn(date);
+        when(dateValidation.today()).thenReturn(later.plusDays(1));
+        when(batchService.requireBatchForUpdate(10L, 7L)).thenReturn(batch);
+        when(eventRepository.findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(
+                any(), any(), any())).thenReturn(List.of(previous));
+        when(eventRepository.save(any(BatchEvent.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        var result = service.record(10L, 7L, 21L,
+                new CreateBatchEventRequest(date, EventType.ACCIDENTAL_DEATH,
+                        "Accidental death", null, 1, null, null));
+
+        assertThat(result.remainingPopulation()).isEqualTo(52);
+        assertThat(result.event().getPopulationAfter()).isEqualTo(54);
+        assertThat(previous.getPopulationAfter()).isEqualTo(52);
     }
 
     private static Batch batch(int currentPopulation) {

@@ -15,8 +15,12 @@ public record FinanceAnalyticsResponse(
         Totals totals,
         List<SeriesPoint> series,
         List<CategoryTotal> categoryTotals,
-        Limitations limitations
+        Limitations limitations,
+        List<CurrencyReport> byCurrency
 ) {
+    public record CurrencyReport(String currency, Totals totals, List<SeriesPoint> series,
+                                 List<CategoryTotal> categoryTotals) {}
+
     public record Totals(
             BigDecimal recordedIncome,
             BigDecimal saleIncome,

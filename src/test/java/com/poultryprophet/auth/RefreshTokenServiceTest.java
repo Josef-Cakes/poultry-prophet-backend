@@ -39,6 +39,7 @@ class RefreshTokenServiceTest {
         RefreshTokenService service = new RefreshTokenService(tokenRepository, userRepository, properties);
         User user = user(7L);
 
+        when(userRepository.findByIdForUpdate(7L)).thenReturn(Optional.of(user));
         ArgumentCaptor<AuthRefreshToken> saved = ArgumentCaptor.forClass(AuthRefreshToken.class);
         when(tokenRepository.save(saved.capture())).thenAnswer(invocation -> invocation.getArgument(0));
 
@@ -57,8 +58,9 @@ class RefreshTokenServiceTest {
         RefreshTokenService service = new RefreshTokenService(tokenRepository, userRepository, properties());
         AuthRefreshToken stored = storedToken(7L, Instant.now().plusSeconds(60));
         User user = user(7L);
+        when(tokenRepository.findByTokenHash(anyString())).thenReturn(Optional.of(stored));
         when(tokenRepository.findByTokenHashForUpdate(anyString())).thenReturn(Optional.of(stored));
-        when(userRepository.findById(7L)).thenReturn(Optional.of(user));
+        when(userRepository.findByIdForUpdate(7L)).thenReturn(Optional.of(user));
         when(tokenRepository.save(any(AuthRefreshToken.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         RefreshTokenService.Rotation rotation = service.rotate("known-refresh-token");
@@ -75,6 +77,8 @@ class RefreshTokenServiceTest {
         AuthRefreshToken reused = storedToken(7L, Instant.now().plusSeconds(60));
         reused.revoke(Instant.now().minusSeconds(1));
         AuthRefreshToken otherSession = storedToken(7L, Instant.now().plusSeconds(60));
+        when(tokenRepository.findByTokenHash(anyString())).thenReturn(Optional.of(reused));
+        when(userRepository.findByIdForUpdate(7L)).thenReturn(Optional.of(user(7L)));
         when(tokenRepository.findByTokenHashForUpdate(anyString())).thenReturn(Optional.of(reused));
         when(tokenRepository.findByUserIdAndRevokedAtIsNull(7L)).thenReturn(List.of(otherSession));
         when(tokenRepository.save(any(AuthRefreshToken.class))).thenAnswer(invocation -> invocation.getArgument(0));

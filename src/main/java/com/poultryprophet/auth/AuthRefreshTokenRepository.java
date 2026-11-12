@@ -11,6 +11,8 @@ import java.util.Optional;
 
 public interface AuthRefreshTokenRepository extends JpaRepository<AuthRefreshToken, Long> {
 
+    Optional<AuthRefreshToken> findByTokenHash(String tokenHash);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select t from AuthRefreshToken t where t.tokenHash = :tokenHash")
     Optional<AuthRefreshToken> findByTokenHashForUpdate(@Param("tokenHash") String tokenHash);

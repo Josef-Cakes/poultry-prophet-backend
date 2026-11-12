@@ -5,6 +5,15 @@ services:
     plan: free
     healthCheckPath: /api/health
     envVars:
+      - key: APP_ENVIRONMENT
+        value: production
+      # A deployment must not silently mutate schema or baseline an existing database.
+      - key: SPRING_JPA_HIBERNATE_DDL_AUTO
+        value: validate
+      - key: SPRING_SQL_INIT_MODE
+        value: never
+      - key: SPRING_FLYWAY_ENABLED
+        value: "false"
       - key: SPRING_DATASOURCE_URL
         sync: false
       - key: SPRING_DATASOURCE_USERNAME

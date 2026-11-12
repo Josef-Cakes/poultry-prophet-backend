@@ -239,21 +239,30 @@ public class FarmSummaryAnalyticsService {
     }
 
     private FarmSummaryAnalyticsResponse.FinanceSummary financeSummary(FinanceAnalyticsResponse source) {
-        FinanceAnalyticsResponse.Totals totals = source.totals();
-        List<FarmSummaryAnalyticsResponse.CashFlowBucket> series = source.series().stream()
+        List<FarmSummaryAnalyticsResponse.FinanceCurrencySummary> currencies = source.byCurrency().stream()
+                .map(this::financeCurrencySummary).toList();
+        FarmSummaryAnalyticsResponse.FinanceCurrencySummary single = currencies.size() == 1 ? currencies.get(0) : null;
+        long transactionCount = currencies.stream().mapToLong(FarmSummaryAnalyticsResponse.FinanceCurrencySummary::transactionCount).sum();
+        return new FarmSummaryAnalyticsResponse.FinanceSummary(
+                single == null ? null : single.currency(), single == null ? null : single.income(),
+                single == null ? null : single.saleIncome(), currencies.stream().mapToLong(FarmSummaryAnalyticsResponse.FinanceCurrencySummary::saleTransactionCount).sum(),
+                single == null ? null : single.expense(), single == null ? null : single.net(), transactionCount,
+                single == null ? List.of() : single.series(), single == null ? List.of() : single.categories(),
+                transactionCount > 0, source.limitations().message(), currencies);
+    }
+
+    private FarmSummaryAnalyticsResponse.FinanceCurrencySummary financeCurrencySummary(FinanceAnalyticsResponse.CurrencyReport report) {
+        FinanceAnalyticsResponse.Totals totals = report.totals();
+        List<FarmSummaryAnalyticsResponse.CashFlowBucket> series = report.series().stream()
                 .map(point -> new FarmSummaryAnalyticsResponse.CashFlowBucket(
                         point.periodStart(), point.periodEnd(), point.label(), number(point.income()),
-                        number(point.expense()), number(point.netChange())))
-                .toList();
-        List<FarmSummaryAnalyticsResponse.CategoryTotal> categories = source.categoryTotals().stream()
-                .map(category -> new FarmSummaryAnalyticsResponse.CategoryTotal(
-                        category.category(), number(category.amount())))
-                .toList();
-        return new FarmSummaryAnalyticsResponse.FinanceSummary(
-                source.currency(), number(totals.recordedIncome()), number(totals.saleIncome()),
-                totals.saleTransactionCount(), number(totals.recordedExpense()),
-                number(totals.recordedNetCashFlow()), totals.postedTransactionCount(), series,
-                categories, totals.postedTransactionCount() > 0, source.limitations().message());
+                        number(point.expense()), number(point.netChange()))).toList();
+        List<FarmSummaryAnalyticsResponse.CategoryTotal> categories = report.categoryTotals().stream()
+                .map(category -> new FarmSummaryAnalyticsResponse.CategoryTotal(category.category(), number(category.amount()))).toList();
+        return new FarmSummaryAnalyticsResponse.FinanceCurrencySummary(report.currency(), number(totals.recordedIncome()),
+                number(totals.saleIncome()), totals.saleTransactionCount(), number(totals.recordedExpense()),
+                number(totals.recordedNetCashFlow()), totals.postedTransactionCount(), series, categories,
+                totals.postedTransactionCount() > 0);
     }
 
     private String number(BigDecimal value) {

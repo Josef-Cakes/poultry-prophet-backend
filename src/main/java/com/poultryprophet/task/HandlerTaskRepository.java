@@ -12,4 +12,7 @@ public interface HandlerTaskRepository extends JpaRepository<HandlerTask, Long>,
     @org.springframework.data.jpa.repository.Query("select t from HandlerTask t where t.farmId = :farmId and (t.assignedHandlerId = :handlerId or t.assignmentScope in ('BATCH_TEAM','FARM_TEAM')) and (t.visibleFrom is null or t.visibleFrom <= :now) order by t.dueAt asc nulls last, t.createdAt desc")
     List<HandlerTask> findVisibleToHandler(Long farmId, Long handlerId, Instant now);
     Optional<HandlerTask> findByIdAndFarmId(Long id, Long farmId);
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @org.springframework.data.jpa.repository.Query("select t from HandlerTask t where t.id = :id and t.farmId = :farmId")
+    Optional<HandlerTask> findByIdAndFarmIdForUpdate(Long id, Long farmId);
 }

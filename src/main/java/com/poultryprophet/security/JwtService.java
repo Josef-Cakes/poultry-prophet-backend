@@ -29,8 +29,8 @@ public class JwtService {
         Date now = new Date();
         Date expiry = new Date(now.getTime() + expirationMs);
         return Jwts.builder()
-                .subject(user.getEmail())
-                .claim("uid", user.getId())
+                .subject(user.getId().toString())
+                .claim("credentialVersion", user.getCredentialVersion())
                 .claim("role", user.getRole().name())
                 .claim("farmId", user.getFarmId())
                 .issuedAt(now)
@@ -39,18 +39,33 @@ public class JwtService {
                 .compact();
     }
 
-    public String extractEmail(String token) {
-        return parse(token).getSubject();
+    public TokenIdentity identity(String token) {
+        Claims claims = parse(token);
+        String subject = claims.getSubject();
+        Object version = claims.get("credentialVersion");
+        if (claims.getExpiration() == null || claims.getIssuedAt() == null
+                || subject == null || !subject.matches("[1-9][0-9]*")
+                || !(version instanceof Integer || version instanceof Long)) {
+            throw new IllegalArgumentException("Invalid access token claims");
+        }
+        long userId = Long.parseLong(subject);
+        long credentialVersion = ((Number) version).longValue();
+        if (credentialVersion < 0) {
+            throw new IllegalArgumentException("Invalid access token claims");
+        }
+        return new TokenIdentity(userId, credentialVersion);
     }
 
     public boolean isValid(String token) {
         try {
-            parse(token);
+            identity(token);
             return true;
-        } catch (Exception ex) {
+        } catch (RuntimeException ex) {
             return false;
         }
     }
+
+    public record TokenIdentity(long userId, long credentialVersion) { }
 
     private Claims parse(String token) {
         return Jwts.parser()

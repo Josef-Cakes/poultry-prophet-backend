@@ -12,7 +12,7 @@ class TestLabSafetyServiceTest {
     @Test
     void enablesLocalEnvironmentWithLocalDatabase() {
         TestLabStatusResponse status = service("local",
-                "jdbc:postgresql://localhost:5432/poultry_prophet").status();
+                "jdbc:postgresql://localhost:5432/poultry_prophet_test").status();
 
         assertThat(status.enabled()).isTrue();
         assertThat(status.environment()).isEqualTo("local");
@@ -44,9 +44,18 @@ class TestLabSafetyServiceTest {
         assertThatThrownBy(service::requireEnabled).isInstanceOf(AccessDeniedException.class);
     }
 
+    @Test
+    void rejectsLocalDatabaseWithoutDisposableNameOrExplicitOptIn() {
+        assertThat(service("local", "jdbc:postgresql://localhost:5432/poultry_prophet").status().enabled()).isFalse();
+        ReleaseProperties properties = new ReleaseProperties();
+        properties.setEnvironment("validation");
+        assertThat(new TestLabSafetyService(properties,
+                "jdbc:postgresql://localhost:5432/poultry_prophet_validation", false).status().enabled()).isFalse();
+    }
+
     private TestLabSafetyService service(String environment, String datasourceUrl) {
         ReleaseProperties properties = new ReleaseProperties();
         properties.setEnvironment(environment);
-        return new TestLabSafetyService(properties, datasourceUrl);
+        return new TestLabSafetyService(properties, datasourceUrl, true);
     }
 }

@@ -39,7 +39,11 @@ public record FarmSummaryAnalyticsResponse(
                                  String net, long transactionCount,
                                  List<CashFlowBucket> series,
                                  List<CategoryTotal> categories,
-                                 boolean available, String limitation) {}
+                                 boolean available, String limitation, List<FinanceCurrencySummary> byCurrency) {}
+    public record FinanceCurrencySummary(String currency, String income, String saleIncome,
+                                         long saleTransactionCount, String expense, String net,
+                                         long transactionCount, List<CashFlowBucket> series,
+                                         List<CategoryTotal> categories, boolean available) {}
     public record CashFlowBucket(LocalDate periodStart, LocalDate periodEnd,
                                  String label, String income, String expense,
                                  String net) {}

@@ -64,14 +64,17 @@ public class OfflineBootstrapController {
         for (BatchResponse batch : batches) {
             plans.put(batch.id(), vaccinationService.plan(batch.id(), farmId));
             overviews.put(batch.id(), overviewService.getOverview(batch.id(), farmId));
-            events.put(batch.id(), eventService.recent(batch.id(), farmId, 100));
+            events.put(batch.id(), eventService.recent(batch.id(), farmId, 100).stream()
+                    .map(event -> event.forRole(principal.getUser().getRole())).toList());
             // Field recording needs recent context, not the complete historical
             // log. The full history remains available from the paged endpoint.
-            inputs.put(batch.id(), inputService.page(farmId, batch.id(), null, false, null, 0, 50).items());
+            inputs.put(batch.id(), inputService.page(farmId, batch.id(), null, false, null, 0, 50).items().stream()
+                    .map(input -> input.forRole(principal.getUser().getRole())).toList());
         }
         boolean manager = principal.getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("ROLE_MANAGER"));
         List<TaskResponse> tasks = taskService.offlineTasks(farmId, principal.getId(), manager);
-        List<FarmProductResponse> products = inventoryService.listProducts(farmId, false);
+        List<FarmProductResponse> products = inventoryService.listProducts(farmId, false).stream()
+                .map(product -> product.forRole(principal.getUser().getRole())).toList();
         List<BatchDashboardResponse> dashboard = dashboardService.listForFarm(farmId);
         return new OfflineBootstrapResponse(farmId, principal.getId(), principal.getUser().getRole().name(),
                 Instant.now(), batches, dashboard, products, tasks, plans, overviews, events, inputs);
