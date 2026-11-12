@@ -33,6 +33,11 @@ public class RefreshTokenService {
 
     @Transactional
     public IssuedToken issue(User user) {
+        User current = userRepository.findByIdForUpdate(user.getId())
+                .orElseThrow(() -> new BadRequestException("Refresh token owner no longer exists"));
+        if (current.getCredentialVersion() != user.getCredentialVersion()) {
+            throw new BadRequestException("Credentials have changed; please sign in again");
+        }
         String rawToken = generateRawToken();
         Instant expiresAt = Instant.now().plusMillis(securityProperties.getRefreshTokenExpirationMs());
 
@@ -49,9 +54,14 @@ public class RefreshTokenService {
      * token revokes the user's remaining refresh sessions as a token-reuse
      * response.
      */
-    @Transactional
+    @Transactional(noRollbackFor = BadRequestException.class)
     public Rotation rotate(String rawToken) {
-        AuthRefreshToken stored = tokenRepository.findByTokenHashForUpdate(hash(rawToken))
+        String tokenHash = hash(rawToken);
+        AuthRefreshToken candidate = tokenRepository.findByTokenHash(tokenHash)
+                .orElseThrow(() -> new BadRequestException("Invalid refresh token"));
+        User user = userRepository.findByIdForUpdate(candidate.getUserId())
+                .orElseThrow(() -> new BadRequestException("Refresh token owner no longer exists"));
+        AuthRefreshToken stored = tokenRepository.findByTokenHashForUpdate(tokenHash)
                 .orElseThrow(() -> new BadRequestException("Invalid refresh token"));
         Instant now = Instant.now();
 
@@ -65,8 +75,6 @@ public class RefreshTokenService {
             throw new BadRequestException("Refresh token has expired");
         }
 
-        User user = userRepository.findById(stored.getUserId())
-                .orElseThrow(() -> new BadRequestException("Refresh token owner no longer exists"));
         stored.revoke(now);
         tokenRepository.save(stored);
         IssuedToken replacement = issue(user);
@@ -78,16 +86,22 @@ public class RefreshTokenService {
         if (rawToken == null || rawToken.isBlank()) {
             return;
         }
-        tokenRepository.findByTokenHashForUpdate(hash(rawToken)).ifPresent(token -> {
-            if (token.getRevokedAt() == null) {
-                token.revoke(Instant.now());
-                tokenRepository.save(token);
-            }
+        String tokenHash = hash(rawToken);
+        tokenRepository.findByTokenHash(tokenHash).ifPresent(candidate -> {
+            if (userRepository.findByIdForUpdate(candidate.getUserId()).isEmpty()) return;
+            tokenRepository.findByTokenHashForUpdate(tokenHash).ifPresent(token -> {
+                if (token.getRevokedAt() == null) {
+                    token.revoke(Instant.now());
+                    tokenRepository.save(token);
+                }
+            });
         });
     }
 
     @Transactional
     public void revokeAllForUser(Long userId) {
+        userRepository.findByIdForUpdate(userId)
+                .orElseThrow(() -> new BadRequestException("Refresh token owner no longer exists"));
         revokeAllForUser(userId, Instant.now());
     }
 

@@ -31,14 +31,16 @@ public class FarmInputController {
     public ResponseEntity<FarmInputLogResponse> create(@Valid @RequestBody CreateFarmInputRequest request,
                                                        @AuthenticationPrincipal CustomUserDetails principal) {
         return ResponseEntity.status(HttpStatus.CREATED).body(service.create(
-                principal.getFarmId(), principal.getId(), principal.getUser().getRole(), request));
+                principal.getFarmId(), principal.getId(), principal.getUser().getRole(), request)
+                .forRole(principal.getUser().getRole()));
     }
 
     @GetMapping
     public List<FarmInputLogResponse> list(@RequestParam(required = false) Long batchId,
                                            @RequestParam(required = false) Long incubationCycleId,
                                            @AuthenticationPrincipal CustomUserDetails principal) {
-        return service.list(principal.getFarmId(), batchId, incubationCycleId);
+        return service.list(principal.getFarmId(), batchId, incubationCycleId).stream()
+                .map(input -> input.forRole(principal.getUser().getRole())).toList();
     }
 
     @GetMapping("/page")
@@ -49,6 +51,7 @@ public class FarmInputController {
                                                   @RequestParam(required = false) Boolean farmWide,
                                                   @RequestParam(required = false) InputProductType productType,
                                                   @AuthenticationPrincipal CustomUserDetails principal) {
-        return service.page(principal.getFarmId(), batchId, incubationCycleId, farmWide, productType, page, size);
+        return service.page(principal.getFarmId(), batchId, incubationCycleId, farmWide, productType, page, size)
+                .map(input -> input.forRole(principal.getUser().getRole()));
     }
 }

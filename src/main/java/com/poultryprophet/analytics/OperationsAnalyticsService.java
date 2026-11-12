@@ -70,7 +70,14 @@ public class OperationsAnalyticsService {
         InputUsageAnalyticsResponse inputStats = new InputUsageAnalyticsResponse(inputs.size(), countBy(inputs, i -> i.getProductType().name()), countBy(inputs, FarmInputLog::getBrandName));
 
         FinanceSummaryResponse finance = financeService.summary(farmId, effectiveStart, effectiveEnd);
-        OperationsAnalyticsResponse.FinanceSummary financeStats = new OperationsAnalyticsResponse.FinanceSummary("PHP", finance.income().toPlainString(), finance.expense().toPlainString(), finance.net().toPlainString(), finance.transactionCount());
+        List<OperationsAnalyticsResponse.CurrencyTotal> currencyTotals = finance.byCurrency().stream()
+                .map(value -> new OperationsAnalyticsResponse.CurrencyTotal(value.currency(), value.income().toPlainString(),
+                        value.expense().toPlainString(), value.net().toPlainString())).toList();
+        OperationsAnalyticsResponse.CurrencyTotal single = currencyTotals.size() == 1 ? currencyTotals.get(0) : null;
+        OperationsAnalyticsResponse.FinanceSummary financeStats = new OperationsAnalyticsResponse.FinanceSummary(
+                single == null ? null : single.currency(), single == null ? null : single.income(),
+                single == null ? null : single.expense(), single == null ? null : single.net(),
+                finance.transactionCount(), currencyTotals);
         return new OperationsAnalyticsResponse(effectiveStart, effectiveEnd, incubation, taskStats, inputStats, financeStats);
     }
 

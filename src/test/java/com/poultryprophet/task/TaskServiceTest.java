@@ -87,10 +87,27 @@ class TaskServiceTest {
         task.setAssignedHandlerId(22L);
         task.setAssignmentScope("HANDLER");
         task.setStatus(TaskStatus.TODO);
-        when(taskRepository.findByIdAndFarmId(7L, 1L)).thenReturn(Optional.of(task));
+        when(taskRepository.findByIdAndFarmIdForUpdate(7L, 1L)).thenReturn(Optional.of(task));
 
         assertThrows(BadRequestException.class, () -> service.updateStatus(7L, 1L, 10L, true,
                 new UpdateTaskStatusRequest(TaskStatus.COMPLETED, null)));
+    }
+
+    @Test
+    void handlerCannotCancelOrReopenTerminalTask() {
+        HandlerTask task = new HandlerTask();
+        task.setId(7L);
+        task.setFarmId(1L);
+        task.setAssignedHandlerId(22L);
+        task.setAssignmentScope("HANDLER");
+        task.setStatus(TaskStatus.TODO);
+        when(taskRepository.findByIdAndFarmIdForUpdate(7L, 1L)).thenReturn(Optional.of(task));
+
+        assertThrows(BadRequestException.class, () -> service.updateStatus(7L, 1L, 22L, false,
+                new UpdateTaskStatusRequest(TaskStatus.CANCELLED, null)));
+        task.setStatus(TaskStatus.COMPLETED);
+        assertThrows(BadRequestException.class, () -> service.updateStatus(7L, 1L, 22L, false,
+                new UpdateTaskStatusRequest(TaskStatus.IN_PROGRESS, null)));
     }
 
     @Test

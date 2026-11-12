@@ -22,7 +22,8 @@ fighting performance.
 ## Requirements
 
 - **JDK 21+** (developed/tested building on JDK 25; bytecode target is 21).
-- A **Supabase** (PostgreSQL) database.
+- PostgreSQL. Use the disposable local validation stack for schema bootstrap; an existing
+  database must already have a compatible, independently reviewed schema.
 - Maven — use the bundled wrapper (`./mvnw`), no system Maven needed.
 
 ## Local setup with Supabase
@@ -63,8 +64,12 @@ $env:SPRING_DATASOURCE_PASSWORD="<your-db-password>"
 $env:JWT_SECRET="<a base64 string of at least 32 bytes>"
 ```
 
-`spring.jpa.hibernate.ddl-auto=update` creates/updates tables automatically on a local validation
-run. Production schema changes require a reviewed migration and backup.
+Normal startup validates Hibernate's mapped schema and does not run `schema.sql` or Flyway.
+It can fail on an empty or incompatible database; Hibernate validation does not prove that
+indexes, constraints, backfills, or all application behavior are correct. The `validation`
+profile intentionally uses Hibernate `update` and `schema.sql` **only with a disposable local
+database**. Selecting that profile does not itself verify the database host. See the
+[migration runbook](docs/migrations/README.md) before a deployment or baseline.
 The Hikari pool defaults to at most five connections per backend process (one idle connection).
 For Supabase's session pooler, budget that limit across every backend instance using the same
 database role and database; leave room for local tools and overlapping deploys. If startup reports
@@ -88,16 +93,8 @@ chmod +x mvnw                 # Linux/macOS; only needed once
 java -jar target/poultry-prophet-backend-0.1.0.jar
 ```
 
-For an existing validation database, apply the reviewed inventory-cost migration before
-starting the backend. The runner prints a preflight, requires a non-empty backup file and
-explicit approval, and verifies that the backfill removed null valuation states:
-
-```bash
-BACKUP_FILE=/path/to/reviewed-backup.dump \
-DATABASE_URL='postgresql://...' \
-INVENTORY_MIGRATION_APPROVED=YES \
-bash scripts/apply-inventory-cost-valuation.sh
-```
+The legacy SQL files and manual runners are not a fresh-install migration chain. Do not run
+them as a group or infer that a database has received any particular file from its filename.
 
 Verify the running API in another terminal:
 

@@ -36,7 +36,7 @@ public class BatchEventController {
             @AuthenticationPrincipal CustomUserDetails principal) {
         BatchEventResponse response = eventService.create(
                 batchId, principal.getFarmId(), principal.getId(), req);
-        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+        return ResponseEntity.status(HttpStatus.CREATED).body(response.forRole(principal.getUser().getRole()));
     }
 
     @GetMapping
@@ -44,7 +44,8 @@ public class BatchEventController {
             @PathVariable Long batchId,
             @RequestParam(defaultValue = "30") int limit,
             @AuthenticationPrincipal CustomUserDetails principal) {
-        return eventService.recent(batchId, principal.getFarmId(), limit);
+        return eventService.recent(batchId, principal.getFarmId(), limit).stream()
+                .map(event -> event.forRole(principal.getUser().getRole())).toList();
     }
 
     @GetMapping("/page")
@@ -56,7 +57,7 @@ public class BatchEventController {
             @RequestParam(required = false) String search, @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size, @AuthenticationPrincipal CustomUserDetails principal) {
         return eventService.page(batchId, principal.getFarmId(), start, end, type, handlerId, concernLevel,
-                populationOnly, search, page, size);
+                populationOnly, search, page, size).map(event -> event.forRole(principal.getUser().getRole()));
     }
 
     @GetMapping("/report")

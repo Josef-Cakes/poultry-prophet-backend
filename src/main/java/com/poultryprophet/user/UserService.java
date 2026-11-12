@@ -4,6 +4,7 @@ import com.poultryprophet.common.BadRequestException;
 import com.poultryprophet.common.ConflictException;
 import com.poultryprophet.common.NotFoundException;
 import com.poultryprophet.farm.FarmRepository;
+import com.poultryprophet.auth.RefreshTokenService;
 import com.poultryprophet.user.dto.CreateHandlerRequest;
 import com.poultryprophet.user.dto.HandlerResponse;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -18,12 +19,14 @@ public class UserService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final FarmRepository farmRepository;
+    private final RefreshTokenService refreshTokenService;
 
     public UserService(UserRepository userRepository, PasswordEncoder passwordEncoder,
-                       FarmRepository farmRepository) {
+                       FarmRepository farmRepository, RefreshTokenService refreshTokenService) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.farmRepository = farmRepository;
+        this.refreshTokenService = refreshTokenService;
     }
 
     @Transactional
@@ -72,12 +75,14 @@ public class UserService {
     /** Change the caller's own password after verifying the current one. */
     @Transactional
     public void changePassword(Long userId, String currentPassword, String newPassword) {
-        User user = userRepository.findById(userId)
+        User user = userRepository.findByIdForUpdate(userId)
                 .orElseThrow(() -> new NotFoundException("User " + userId + " not found"));
         if (!passwordEncoder.matches(currentPassword, user.getPasswordHash())) {
             throw new BadRequestException("Current password is incorrect");
         }
         user.setPasswordHash(passwordEncoder.encode(newPassword));
+        user.invalidateCredentials();
         userRepository.save(user);
+        refreshTokenService.revokeAllForUser(userId);
     }
 }

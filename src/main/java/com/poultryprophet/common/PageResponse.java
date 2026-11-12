@@ -19,6 +19,10 @@ public record PageResponse<T>(
         boolean hasPrevious,
         boolean hasNext
 ) {
+    public <R> PageResponse<R> map(Function<T, R> mapper) {
+        return new PageResponse<>(items.stream().map(mapper).toList(), page, size, totalItems,
+                totalPages, hasPrevious, hasNext);
+    }
     public static <S, T> PageResponse<T> from(Page<S> source, Function<S, T> mapper) {
         return new PageResponse<>(
                 source.getContent().stream().map(mapper).toList(),

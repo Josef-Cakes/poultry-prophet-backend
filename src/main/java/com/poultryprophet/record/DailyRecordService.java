@@ -16,6 +16,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import com.poultryprophet.common.ConflictException;
 
 import java.time.Instant;
 import java.time.LocalDate;
@@ -62,6 +63,16 @@ public class DailyRecordService {
         return DailyRecordResponse.from(saved);
     }
 
+    /** Do not let a delayed offline measurement overwrite a record already saved for that day. */
+    @Transactional
+    public DailyRecordResponse recordOffline(Long batchId, Long farmId, CreateRecordRequest req, Long handlerId) {
+        batchService.requireBatchForUpdate(batchId, farmId);
+        if (recordRepository.findByBatchIdAndRecordDate(batchId, req.recordDate()).isPresent()) {
+            throw new ConflictException("A measurement already exists for this batch and date; review the queued record.");
+        }
+        return record(batchId, farmId, req, handlerId);
+    }
+
     /**
      * Idempotent upsert keyed on (batch, recordDate). Loads the batch inside this
      * transaction so canonical health-death totals are mirrored into the daily record, then
@@ -83,7 +94,8 @@ public class DailyRecordService {
                               Double waterIntakeMl, String behaviorNotes,
                               ObservationQuality temperatureQuality, ObservationQuality feedQuality,
                               ObservationQuality waterQuality, Instant updatedAt, SyncStatus syncStatus) {
-        Batch batch = batchService.requireWritableBatch(batchId, farmId);
+        Batch batch = batchService.requireBatchForUpdate(batchId, farmId);
+        batchService.ensureWritable(batch);
         LocalDate selectedDate = dateValidation.resolve(date);
         dateValidation.validate(selectedDate, batch.getHatchDate());
         DailyRecord record = recordRepository.findByBatchIdAndRecordDate(batch.getId(), selectedDate)
@@ -93,7 +105,8 @@ public class DailyRecordService {
         if (legacyDataProperties.isAllowMortalityReconciliation()) {
             derivedMortality = mortalityAccountingService.reconcileLegacyMortality(
                     batchId, farmId, handlerId, selectedDate, mortalityCount);
-            batch = batchService.requireWritableBatch(batchId, farmId);
+            batch = batchService.requireBatchForUpdate(batchId, farmId);
+            batchService.ensureWritable(batch);
         } else {
             if (mortalityCount != null && mortalityCount != canonicalHealthDeaths) {
                 throw new BadRequestException(

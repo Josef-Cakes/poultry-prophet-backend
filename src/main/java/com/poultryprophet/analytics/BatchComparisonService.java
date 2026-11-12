@@ -118,8 +118,10 @@ public class BatchComparisonService {
                     ? (long) (event.getPopulationDelta() == null ? 0 : event.getPopulationDelta())
                     : Math.abs((long) event.getAffectedCount()), Long::sum);
         }
-        List<FarmInputLog> productRecords = inputRepository.findByFarmIdAndBatchIdOrderByRecordedAtDesc(farmId, batch.getId())
-                .stream().filter(input -> within(input, batch.getHatchDate(), end)).toList();
+        List<FarmInputLog> productRecords = inputRepository
+                .findByFarmIdAndBatchIdAndRecordedAtGreaterThanEqualAndRecordedAtLessThanOrderByRecordedAtDesc(
+                        farmId, batch.getId(), batch.getHatchDate().atStartOfDay(farmZone).toInstant(),
+                        end.plusDays(1).atStartOfDay(farmZone).toInstant());
         SelectionSessionResponse selection = selectionSessionService.latestFinalized(batch.getId(), farmId, end);
         PopulationProjection projection = populationProjectionService.project(batch, events, end, farmZone);
         List<String> limitations = new ArrayList<>();
@@ -137,12 +139,6 @@ public class BatchComparisonService {
                 selection == null ? null : selection.evaluatedCount(), selection == null ? null : selection.acceptedCount(),
                 selection == null ? null : selection.selectionRatePercent(), selection == null ? "NO_RECORD" : "AVAILABLE",
                 events.size(), productRecords.size(), limitations);
-    }
-
-    private boolean within(FarmInputLog input, LocalDate start, LocalDate end) {
-        if (input.getRecordedAt() == null) return false;
-        return !input.getRecordedAt().isBefore(start.atStartOfDay(farmZone).toInstant())
-                && input.getRecordedAt().isBefore(end.plusDays(1).atStartOfDay(farmZone).toInstant());
     }
 
     private String cause(EventType type) {

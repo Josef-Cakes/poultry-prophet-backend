@@ -37,6 +37,13 @@ public record BatchEventResponse(
         String saleBuyer,
         String saleReference
 ) {
+    public BatchEventResponse forRole(com.poultryprophet.user.Role role) {
+        if (role == com.poultryprophet.user.Role.MANAGER) return this;
+        return new BatchEventResponse(id, batchId, handlerId, handlerName, eventDate, eventType, severityLabel,
+                concernLevel, affectedCount, title, details, tags, createdAt, operationId, populationDelta,
+                populationAfter, remainingPopulation, salePurpose, maleDelta, femaleDelta, unclassifiedDelta,
+                occurredAt, null, null, null, null);
+    }
     public static BatchEventResponse from(BatchEvent e, String handlerName) {
         return from(e, handlerName, null);
     }

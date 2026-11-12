@@ -63,6 +63,55 @@ public class FinanceService {
         return FinancialTransactionResponse.from(repository.save(tx));
     }
 
+    /** Records a farm-wide inventory purchase within the caller's transaction. */
+    @Transactional
+    public FinancialTransactionResponse createInventoryPurchase(Long farmId, Long userId,
+                                                                 CreateFinancialTransactionRequest req) {
+        if (farmId == null || req.sourceOperationId() == null || req.batchId() != null
+                || req.incubationCycleId() != null || req.type() != FinanceTransactionType.EXPENSE
+                || !"INVENTORY_PURCHASE".equals(req.sourceType()) || req.amount() == null
+                || req.amount().signum() <= 0) {
+            throw new BadRequestException("Invalid inventory purchase");
+        }
+        FinancialTransaction existing = repository.findByFarmIdAndSourceOperationId(farmId, req.sourceOperationId().toString()).orElse(null);
+        if (existing != null) {
+            if (!"INVENTORY_PURCHASE".equals(existing.getSourceType())
+                    || existing.getStatus() != FinanceTransactionStatus.POSTED
+                    || existing.getType() != FinanceTransactionType.EXPENSE
+                    || existing.getAmount().compareTo(req.amount()) != 0
+                    || !java.util.Objects.equals(existing.getTransactionDate(), req.transactionDate())
+                    || !java.util.Objects.equals(existing.getCategory(), req.category())
+                    || !java.util.Objects.equals(existing.getCounterparty(), trim(req.counterparty()))
+                    || !java.util.Objects.equals(existing.getDescription(), trim(req.description()))) {
+                throw new com.poultryprophet.common.ConflictException("Operation ID belongs to a different financial transaction");
+            }
+            return FinancialTransactionResponse.from(existing);
+        }
+        FinancialTransaction tx = new FinancialTransaction();
+        tx.setFarmId(farmId);
+        tx.setTransactionDate(req.transactionDate());
+        tx.setType(FinanceTransactionType.EXPENSE);
+        tx.setCategory(req.category().trim());
+        tx.setAmount(req.amount());
+        tx.setCurrency("PHP");
+        tx.setCounterparty(trim(req.counterparty()));
+        tx.setDescription(trim(req.description()));
+        tx.setEnteredBy(userId);
+        tx.setSourceType("INVENTORY_PURCHASE");
+        tx.setSourceOperationId(req.sourceOperationId().toString());
+        return FinancialTransactionResponse.from(repository.save(tx));
+    }
+
+    @Transactional(readOnly = true)
+    public void validateInventoryPurchaseReplay(Long farmId, Long id, String supplier) {
+        FinancialTransaction tx = repository.findByIdAndFarmId(id, farmId)
+                .orElseThrow(() -> new com.poultryprophet.common.ConflictException("Inventory purchase transaction is missing"));
+        if (!"INVENTORY_PURCHASE".equals(tx.getSourceType())
+                || !java.util.Objects.equals(tx.getCounterparty(), trim(supplier))) {
+            throw new com.poultryprophet.common.ConflictException("Operation ID belongs to a different inventory purchase");
+        }
+    }
+
     /** Creates the auditable income side of a sale event exactly once. */
     @Transactional
     public FinancialTransactionResponse createSaleIncome(Long farmId, Long userId, Long batchId,
@@ -167,9 +216,17 @@ public class FinanceService {
         LocalDate effectiveStart = start == null ? effectiveEnd.minusDays(30) : start;
         if (effectiveStart.isAfter(effectiveEnd)) throw new BadRequestException("Start date cannot be after end date");
         List<FinancialTransaction> values = repository.findByFarmIdAndTransactionDateBetweenOrderByTransactionDateAsc(farmId, effectiveStart, effectiveEnd);
-        BigDecimal income = values.stream().filter(v -> v.getStatus() == FinanceTransactionStatus.POSTED && v.getType() == FinanceTransactionType.INCOME).map(FinancialTransaction::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
-        BigDecimal expense = values.stream().filter(v -> v.getStatus() == FinanceTransactionStatus.POSTED && v.getType() == FinanceTransactionType.EXPENSE).map(FinancialTransaction::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
-        return new FinanceSummaryResponse(effectiveStart, effectiveEnd, income, expense, income.subtract(expense), values.size());
+        Map<String, List<FinancialTransaction>> groups = postedByCurrency(values);
+        List<FinanceSummaryResponse.CurrencyTotal> totals = groups.entrySet().stream().map(entry -> {
+            BigDecimal income = entry.getValue().stream().filter(v -> v.getType() == FinanceTransactionType.INCOME)
+                    .map(FinancialTransaction::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal expense = entry.getValue().stream().filter(v -> v.getType() == FinanceTransactionType.EXPENSE)
+                    .map(FinancialTransaction::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
+            return new FinanceSummaryResponse.CurrencyTotal(entry.getKey(), income, expense, income.subtract(expense));
+        }).toList();
+        FinanceSummaryResponse.CurrencyTotal single = totals.size() == 1 ? totals.get(0) : null;
+        return new FinanceSummaryResponse(effectiveStart, effectiveEnd, single == null ? null : single.income(),
+                single == null ? null : single.expense(), single == null ? null : single.net(), values.size(), totals);
     }
 
     @Transactional(readOnly = true)
@@ -234,6 +291,62 @@ public class FinanceService {
         values = repository.findAll(specification, Sort.by(Sort.Order.asc("transactionDate"),
                 Sort.Order.asc("createdAt"), Sort.Order.asc("id")));
 
+        boolean productCostComplete = true;
+        BigDecimal productsConsumed = BigDecimal.ZERO;
+        long productUsageCount = 0;
+        if (batchId != null && inventoryMovementRepository != null) {
+            List<InventoryMovement> movements = inventoryMovementRepository.findByFarmIdAndBatchIdAndOccurredAtBetweenOrderByOccurredAtAsc(
+                    farmId, batchId, effectiveStart.atStartOfDay(java.time.ZoneId.of("Asia/Manila")).toInstant(),
+                    effectiveEnd.plusDays(1).atStartOfDay(java.time.ZoneId.of("Asia/Manila")).toInstant());
+            for (InventoryMovement movement : movements) {
+                if (movement.getMovementType() != InventoryMovementType.USAGE) continue;
+                productUsageCount++;
+                if (movement.getInventoryValueDelta() == null) productCostComplete = false;
+                else productsConsumed = productsConsumed.add(movement.getInventoryValueDelta().abs());
+            }
+        }
+        List<FinancialTransaction> eligible = values.stream()
+                .filter(tx -> batchId == null || !"INVENTORY_PURCHASE".equalsIgnoreCase(tx.getSourceType())
+                        || tx.getType() != FinanceTransactionType.EXPENSE).toList();
+        Map<String, List<FinancialTransaction>> groups = postedByCurrency(eligible);
+        if (productUsageCount > 0) groups.computeIfAbsent("PHP", ignored -> new ArrayList<>());
+        List<FinanceAnalyticsResponse.CurrencyReport> reports = new ArrayList<>();
+        for (var entry : groups.entrySet()) {
+            List<FinancialTransaction> currencyValues = eligible.stream()
+                    .filter(tx -> currencyOf(tx).equals(entry.getKey())).toList();
+            reports.add(currencyReport(entry.getKey(), currencyValues, effectiveStart, effectiveEnd,
+                    productsConsumed, productCostComplete, productUsageCount > 0));
+        }
+        FinanceAnalyticsResponse.CurrencyReport single = reports.size() == 1 ? reports.get(0) : null;
+        String limitation = batchId == null
+                ? "Farm view includes batch-linked and general farm records."
+                : "Batch view includes only transactions linked to this batch; farm-wide costs are excluded. Inventory usage costs use the legacy PHP convention.";
+        if (reports.size() > 1) limitation += " Currencies are shown separately; no conversion is applied.";
+        return new FinanceAnalyticsResponse(scope, batchId, batchName, effectiveStart, effectiveEnd,
+                single == null ? null : single.currency(), single == null ? null : single.totals(),
+                single == null ? List.of() : single.series(), single == null ? List.of() : single.categoryTotals(),
+                new FinanceAnalyticsResponse.Limitations(batchId != null, limitation), reports);
+    }
+
+    private Map<String, List<FinancialTransaction>> postedByCurrency(List<FinancialTransaction> values) {
+        Map<String, List<FinancialTransaction>> groups = new java.util.TreeMap<>();
+        for (FinancialTransaction tx : values) {
+            if (tx.getStatus() == FinanceTransactionStatus.POSTED) {
+                groups.computeIfAbsent(currencyOf(tx), ignored -> new ArrayList<>()).add(tx);
+            }
+        }
+        if (groups.isEmpty()) groups.put("PHP", new ArrayList<>());
+        return groups;
+    }
+
+    private String currencyOf(FinancialTransaction tx) {
+        return tx.getCurrency() == null || tx.getCurrency().isBlank()
+                ? "PHP" : tx.getCurrency().trim().toUpperCase(java.util.Locale.ROOT);
+    }
+
+    private FinanceAnalyticsResponse.CurrencyReport currencyReport(String currency, List<FinancialTransaction> values,
+            LocalDate effectiveStart, LocalDate effectiveEnd, BigDecimal productsConsumed,
+            boolean productCostComplete, boolean hasProductUsage) {
         long spanDays = ChronoUnit.DAYS.between(effectiveStart, effectiveEnd) + 1;
         Map<LocalDate, BigDecimal> incomeByBucket = new LinkedHashMap<>();
         Map<LocalDate, BigDecimal> expenseByBucket = new LinkedHashMap<>();
@@ -261,7 +374,6 @@ public class FinanceService {
                 }
                 incomeByBucket.merge(bucket, tx.getAmount(), BigDecimal::add);
             } else {
-                if (batchId != null && "INVENTORY_PURCHASE".equalsIgnoreCase(tx.getSourceType())) continue;
                 expense = expense.add(tx.getAmount());
                 expenseByBucket.merge(bucket, tx.getAmount(), BigDecimal::add);
                 expenseByCategory.merge(tx.getCategory(), tx.getAmount(), BigDecimal::add);
@@ -293,29 +405,15 @@ public class FinanceService {
                 .limit(8)
                 .map(entry -> new FinanceAnalyticsResponse.CategoryTotal(entry.getKey(), entry.getValue()))
                 .toList();
-        String currency = values.stream().map(FinancialTransaction::getCurrency).filter(value -> value != null && !value.isBlank())
-                .findFirst().orElse("PHP");
-        String limitation = batchId == null
-                ? "Farm view includes batch-linked and general farm records."
-                : "Batch view includes only transactions linked to this batch; farm-wide costs are excluded.";
-        BigDecimal productsConsumed = BigDecimal.ZERO;
-        boolean productCostComplete = true;
-        if (batchId != null && inventoryMovementRepository != null) {
-            List<InventoryMovement> movements = inventoryMovementRepository.findByFarmIdAndBatchIdAndOccurredAtBetweenOrderByOccurredAtAsc(
-                    farmId, batchId, effectiveStart.atStartOfDay(java.time.ZoneId.of("Asia/Manila")).toInstant(),
-                    effectiveEnd.plusDays(1).atStartOfDay(java.time.ZoneId.of("Asia/Manila")).toInstant());
-            for (InventoryMovement movement : movements) {
-                if (movement.getMovementType() != InventoryMovementType.USAGE) continue;
-                if (movement.getInventoryValueDelta() == null) productCostComplete = false;
-                else productsConsumed = productsConsumed.add(movement.getInventoryValueDelta().abs());
-            }
-        }
-        BigDecimal totalRecordedBatchCost = expense.add(productsConsumed);
-        return new FinanceAnalyticsResponse(scope, batchId, batchName, effectiveStart, effectiveEnd, currency,
+        // Inventory valuation historically uses PHP; never add it to another currency.
+        BigDecimal currencyProducts = "PHP".equals(currency) ? productsConsumed : (hasProductUsage ? null : BigDecimal.ZERO);
+        BigDecimal totalRecordedBatchCost = currencyProducts == null ? null : expense.add(currencyProducts);
+        BigDecimal contribution = totalRecordedBatchCost == null ? null : income.subtract(totalRecordedBatchCost);
+        return new FinanceAnalyticsResponse.CurrencyReport(currency,
                 new FinanceAnalyticsResponse.Totals(income, saleIncome, income.subtract(saleIncome), saleTransactionCount,
-                        expense, income.subtract(expense), productsConsumed, totalRecordedBatchCost,
-                        income.subtract(totalRecordedBatchCost), productCostComplete, postedCount, voidedCount),
-                series, categoryTotals, new FinanceAnalyticsResponse.Limitations(batchId != null, limitation));
+                        expense, income.subtract(expense), currencyProducts, totalRecordedBatchCost,
+                        contribution, productCostComplete && currencyProducts != null, postedCount, voidedCount),
+                series, categoryTotals);
     }
 
     private Specification<FinancialTransaction> transactionSpecification(Long farmId, LocalDate start, LocalDate end,

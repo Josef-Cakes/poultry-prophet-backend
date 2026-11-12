@@ -33,6 +33,12 @@ public record FarmInputLogResponse(
         InventoryStatus inventoryStatus,
         Integer affectedBirdCount
 ) {
+    public FarmInputLogResponse forRole(com.poultryprophet.user.Role role) {
+        if (role == com.poultryprophet.user.Role.MANAGER) return this;
+        return new FarmInputLogResponse(id, farmId, batchId, incubationCycleId, recordedAt, productType,
+                brandName, productName, quantity, unit, route, purpose, notes, recordedBy, createdAt,
+                operationId, farmProductId, inventoryMovementId, null, null, null, inventoryStatus, affectedBirdCount);
+    }
     public static FarmInputLogResponse from(FarmInputLog log) {
         return new FarmInputLogResponse(log.getId(), log.getFarmId(), log.getBatchId(),
                 log.getIncubationCycleId(), log.getRecordedAt(), log.getProductType(),

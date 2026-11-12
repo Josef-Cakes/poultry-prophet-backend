@@ -11,6 +11,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.messaging.simp.stomp.StompCommand;
+import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
+import org.springframework.messaging.simp.SimpMessageType;
 import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 
 import java.util.Optional;
@@ -40,11 +42,11 @@ class StompAuthChannelInterceptorTest {
     void rejectsInvalidAndCrossFarmSubscriptionsAndSends() {
         Message<byte[]> connect = frame(StompCommand.CONNECT, "Bearer token", null);
         User user = new User();
+        user.setId(12L);
         user.setEmail("handler@example.test");
         user.setFarmId(7L);
-        when(jwtService.isValid("token")).thenReturn(true);
-        when(jwtService.extractEmail("token")).thenReturn(user.getEmail());
-        when(userRepository.findByEmail(user.getEmail())).thenReturn(Optional.of(user));
+        when(jwtService.identity("token")).thenReturn(new JwtService.TokenIdentity(12L, 0));
+        when(userRepository.findById(12L)).thenReturn(Optional.of(user));
 
         Message<?> authenticated = interceptor.preSend(connect, null);
         StompHeaderAccessor connectAccessor = StompHeaderAccessor.wrap(authenticated);
@@ -57,6 +59,28 @@ class StompAuthChannelInterceptorTest {
                 "/topic/farms/7/alerts", connectAccessor.getUser()), null)).isNotNull();
         assertThat(interceptor.preSend(withPrincipal(StompCommand.SEND,
                 "/app/farms/7/events", connectAccessor.getUser()), null)).isNotNull();
+    }
+
+    @Test
+    void blocksExistingSubscriptionsAfterPasswordChange() {
+        User user = new User();
+        user.setId(12L);
+        user.setEmail("handler@example.test");
+        user.setFarmId(7L);
+        when(jwtService.identity("token")).thenReturn(new JwtService.TokenIdentity(12L, 0));
+        when(userRepository.findById(12L)).thenReturn(Optional.of(user));
+        StompHeaderAccessor connect = StompHeaderAccessor.create(StompCommand.CONNECT);
+        connect.setSessionId("session-1");
+        connect.addNativeHeader("Authorization", "Bearer token");
+        connect.setLeaveMutable(true);
+        interceptor.preSend(MessageBuilder.createMessage(new byte[0], connect.getMessageHeaders()), null);
+        SimpMessageHeaderAccessor output = SimpMessageHeaderAccessor.create(SimpMessageType.MESSAGE);
+        output.setSessionId("session-1");
+        output.setLeaveMutable(true);
+        Message<byte[]> notification = MessageBuilder.createMessage(new byte[0], output.getMessageHeaders());
+        assertThat(interceptor.preSendOutbound(notification)).isNotNull();
+        user.invalidateCredentials();
+        assertThat(interceptor.preSendOutbound(notification)).isNull();
     }
 
     private static Message<byte[]> frame(StompCommand command, String authorization, String destination) {

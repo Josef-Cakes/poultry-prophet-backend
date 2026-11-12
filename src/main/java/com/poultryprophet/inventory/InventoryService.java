@@ -2,6 +2,7 @@ package com.poultryprophet.inventory;
 
 import com.poultryprophet.batch.BatchService;
 import com.poultryprophet.common.BadRequestException;
+import com.poultryprophet.common.ConflictException;
 import com.poultryprophet.common.PageResponse;
 import com.poultryprophet.common.NotFoundException;
 import com.poultryprophet.finance.FinanceService;
@@ -113,10 +114,12 @@ public class InventoryService {
         requireFarm(farmId);
         UUID operationId = request.operationId() == null ? UUID.randomUUID() : request.operationId();
         InventoryMovement duplicate = movementRepository.findByOperationId(operationId).orElse(null);
-        if (duplicate != null) return InventoryMovementResponse.from(duplicate);
+        if (duplicate != null) return stockInReplay(farmId, productId, request, duplicate);
         BigDecimal quantity = positive(request.quantity(), "Stock quantity must be greater than zero");
         FarmProduct product = productRepository.findByIdAndFarmIdForUpdate(productId, farmId)
                 .orElseThrow(() -> new NotFoundException("Product not found"));
+        duplicate = movementRepository.findByOperationId(operationId).orElse(null);
+        if (duplicate != null) return stockInReplay(farmId, productId, request, duplicate);
         if (request.batchId() != null) {
             throw new BadRequestException("Stock purchases are farm-wide; record product use on the batch instead");
         }
@@ -158,12 +161,15 @@ public class InventoryService {
         }
         BigDecimal unitCost = purchaseUnitCost.setScale(COST_SCALE, RoundingMode.HALF_UP);
         BigDecimal totalCost = quantity.multiply(unitCost).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        if (!freeOfCharge && totalCost.signum() <= 0) {
+            throw new BadRequestException("Purchase total must be at least 0.01");
+        }
         Long financialTransactionId = null;
         InventoryValuationStatus costStatus = freeOfCharge ? InventoryValuationStatus.FREE : InventoryValuationStatus.VALUED;
         BigDecimal oldQuantity = product.getStockOnHand();
         updateAverageCost(product, oldQuantity, quantity, unitCost, costStatus);
         if (costStatus != InventoryValuationStatus.FREE) {
-            FinancialTransactionResponse transaction = financeService.create(farmId, userId,
+            FinancialTransactionResponse transaction = financeService.createInventoryPurchase(farmId, userId,
                     new CreateFinancialTransactionRequest(
                             null, null, request.stockDate() == null ? LocalDate.now() : request.stockDate(),
                             FinanceTransactionType.EXPENSE, product.getProductType().name(), totalCost,
@@ -230,11 +236,13 @@ public class InventoryService {
         requireFarm(farmId);
         UUID operationId = request.operationId() == null ? UUID.randomUUID() : request.operationId();
         InventoryMovement duplicate = movementRepository.findByOperationId(operationId).orElse(null);
-        if (duplicate != null) return InventoryMovementResponse.from(duplicate);
+        if (duplicate != null) return adjustmentReplay(farmId, productId, request, duplicate);
         BigDecimal delta = normalize(request.quantityDelta());
         if (delta.signum() == 0) throw new BadRequestException("Adjustment cannot be zero");
         FarmProduct product = productRepository.findByIdAndFarmIdForUpdate(productId, farmId)
                 .orElseThrow(() -> new NotFoundException("Product not found"));
+        duplicate = movementRepository.findByOperationId(operationId).orElse(null);
+        if (duplicate != null) return adjustmentReplay(farmId, productId, request, duplicate);
         if (product.getStockOnHand().add(delta).signum() < 0) throw new BadRequestException("Adjustment cannot make stock negative");
         InventoryMovementType type = delta.signum() > 0 ? InventoryMovementType.ADJUSTMENT_IN : InventoryMovementType.ADJUSTMENT_OUT;
         BigDecimal unitCost = product.getAverageUnitCost();
@@ -305,6 +313,51 @@ public class InventoryService {
         input.setCalculatedCost(result.batchCost());
         input.setCostStatus(result.costStatus());
         return FarmInputLogResponse.from(inputRepository.save(input));
+    }
+
+    private InventoryMovementResponse adjustmentReplay(Long farmId, Long productId,
+                                                        InventoryAdjustmentRequest request, InventoryMovement movement) {
+        BigDecimal delta = normalize(request.quantityDelta());
+        InventoryMovementType type = delta.signum() > 0 ? InventoryMovementType.ADJUSTMENT_IN : InventoryMovementType.ADJUSTMENT_OUT;
+        if (!sameMovement(movement, farmId, productId, type, delta)
+                || !Objects.equals(trim(request.reason()), movement.getReason())
+                || (request.occurredOn() != null && !dateInstant(request.occurredOn()).equals(movement.getOccurredAt()))) {
+            throw new ConflictException("Operation ID already belongs to a different inventory movement");
+        }
+        return InventoryMovementResponse.from(movement);
+    }
+
+    private InventoryMovementResponse stockInReplay(Long farmId, Long productId, StockInRequest request,
+                                                     InventoryMovement movement) {
+        BigDecimal quantity = positive(request.quantity(), "Stock quantity must be greater than zero");
+        BigDecimal unitCost = request.purchaseUnitCost();
+        if (unitCost == null && request.totalCost() != null) {
+            unitCost = request.totalCost().divide(quantity, COST_SCALE, RoundingMode.HALF_UP);
+        }
+        if (Boolean.TRUE.equals(request.freeOfCharge()) && unitCost == null) unitCost = BigDecimal.ZERO;
+        if (!sameMovement(movement, farmId, productId, InventoryMovementType.STOCK_IN, quantity)
+                || request.batchId() != null || unitCost == null || unitCost.signum() < 0
+                || (Boolean.TRUE.equals(request.freeOfCharge()) && unitCost.signum() != 0)
+                || movement.getUnitCostSnapshot() == null
+                || unitCost.setScale(COST_SCALE, RoundingMode.HALF_UP).compareTo(movement.getUnitCostSnapshot()) != 0
+                || (request.totalCost() != null && (movement.getInventoryValueDelta() == null
+                    || request.totalCost().setScale(MONEY_SCALE, RoundingMode.HALF_UP).compareTo(movement.getInventoryValueDelta()) != 0))
+                || Boolean.TRUE.equals(request.freeOfCharge()) != (movement.getCostStatus() == InventoryValuationStatus.FREE)
+                || !Objects.equals(trim(request.notes()), movement.getReason())
+                || (request.stockDate() != null && !dateInstant(request.stockDate()).equals(movement.getOccurredAt()))) {
+            throw new ConflictException("Operation ID already belongs to a different inventory movement");
+        }
+        if (movement.getFinancialTransactionId() != null) {
+            financeService.validateInventoryPurchaseReplay(farmId, movement.getFinancialTransactionId(), request.supplier());
+        }
+        return InventoryMovementResponse.from(movement);
+    }
+
+    private boolean sameMovement(InventoryMovement movement, Long farmId, Long productId,
+                                 InventoryMovementType type, BigDecimal quantity) {
+        return Objects.equals(movement.getFarmId(), farmId) && Objects.equals(movement.getFarmProductId(), productId)
+                && movement.getMovementType() == type && movement.getQuantityDelta() != null
+                && movement.getQuantityDelta().compareTo(quantity) == 0;
     }
 
     private InventoryMovement saveMovement(Long farmId, FarmProduct product, InventoryMovementType type,

@@ -3,9 +3,12 @@ spring:
     hibernate:
       # Validation-only bootstrap. Production must use a reviewed migration instead.
       ddl-auto: update
+    defer-datasource-initialization: true
   sql:
     init:
       mode: always
+  flyway:
+    enabled: false
 
 app:
   release:

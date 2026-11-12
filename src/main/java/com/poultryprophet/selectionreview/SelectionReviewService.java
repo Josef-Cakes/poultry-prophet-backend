@@ -237,8 +237,10 @@ public class SelectionReviewService {
                 ? events
                 : eventRepository.findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(
                         batch.getId(), batch.getHatchDate(), asOfDate);
-        List<FarmInputLog> products = inputRepository.findByFarmIdAndBatchIdOrderByRecordedAtDesc(farmId, batch.getId())
-                .stream().filter(value -> within(value.getRecordedAt(), periodStart, periodEnd)).toList();
+        List<FarmInputLog> products = inputRepository
+                .findByFarmIdAndBatchIdAndRecordedAtGreaterThanEqualAndRecordedAtLessThanOrderByRecordedAtDesc(
+                        farmId, batch.getId(), periodStart.atStartOfDay(farmZone()).toInstant(),
+                        periodEnd.plusDays(1).atStartOfDay(farmZone()).toInstant());
         Map<Long, InventoryMovement> productMovements = inventoryMovementRepository == null ? Map.of()
                 : inventoryMovementRepository.findByFarmIdAndBatchIdAndOccurredAtBetweenOrderByOccurredAtAsc(
                         farmId, batch.getId(), periodStart.atStartOfDay(farmZone()).toInstant(),
@@ -468,49 +470,61 @@ public class SelectionReviewService {
                 .findByFarmIdAndBatchIdAndTransactionDateBetweenOrderByTransactionDateAsc(farmId, batchId, start, end);
         List<FinancialTransaction> posted = transactions.stream()
                 .filter(value -> value.getStatus() == FinanceTransactionStatus.POSTED).toList();
-        BigDecimal income = posted.stream().filter(value -> value.getType() == FinanceTransactionType.INCOME)
-                .map(FinancialTransaction::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
-        BigDecimal saleIncome = posted.stream()
-                .filter(value -> value.getType() == FinanceTransactionType.INCOME)
-                .filter(value -> "SALE_EVENT".equalsIgnoreCase(value.getSourceType()))
-                .map(FinancialTransaction::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
-        long saleTransactionCount = posted.stream()
-                .filter(value -> value.getType() == FinanceTransactionType.INCOME)
-                .filter(value -> "SALE_EVENT".equalsIgnoreCase(value.getSourceType()))
-                .count();
-        BigDecimal expense = posted.stream().filter(value -> value.getType() == FinanceTransactionType.EXPENSE)
-                .filter(value -> !"INVENTORY_PURCHASE".equalsIgnoreCase(value.getSourceType()))
-                .map(FinancialTransaction::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal productsConsumed = BigDecimal.ZERO;
         boolean complete = true;
+        boolean hasProductUsage = false;
         if (inventoryMovementRepository != null) {
             List<InventoryMovement> movements = inventoryMovementRepository.findByFarmIdAndBatchIdAndOccurredAtBetweenOrderByOccurredAtAsc(
                     farmId, batchId, start.atStartOfDay(farmZone()).toInstant(), end.plusDays(1).atStartOfDay(farmZone()).toInstant());
             for (InventoryMovement movement : movements) {
                 if (movement.getMovementType() != InventoryMovementType.USAGE) continue;
+                hasProductUsage = true;
                 if (movement.getInventoryValueDelta() == null) complete = false;
                 else productsConsumed = productsConsumed.add(movement.getInventoryValueDelta().abs());
             }
         }
-        BigDecimal totalBatchCost = expense.add(productsConsumed);
-        return new SelectionReviewPayload.FinanceSummary(start, end, income, saleIncome,
-                income.subtract(saleIncome), saleTransactionCount, expense, income.subtract(expense),
-                productsConsumed, totalBatchCost, income.subtract(totalBatchCost), posted.size(), !complete,
-                "Recorded cash flow and consumed inventory cost are shown separately; totals may omit unentered records.");
+        Map<String, List<FinancialTransaction>> groups = new java.util.TreeMap<>();
+        for (FinancialTransaction tx : posted) {
+            String currency = tx.getCurrency() == null || tx.getCurrency().isBlank()
+                    ? "PHP" : tx.getCurrency().trim().toUpperCase(java.util.Locale.ROOT);
+            groups.computeIfAbsent(currency, ignored -> new ArrayList<>()).add(tx);
+        }
+        // Inventory movements have no currency snapshot; existing inventory valuation uses PHP.
+        if (hasProductUsage || groups.isEmpty()) groups.computeIfAbsent("PHP", ignored -> new ArrayList<>());
+        List<SelectionReviewPayload.FinanceSummary.CurrencyTotal> totals = new ArrayList<>();
+        for (var entry : groups.entrySet()) {
+            List<FinancialTransaction> values = entry.getValue();
+            BigDecimal income = values.stream().filter(tx -> tx.getType() == FinanceTransactionType.INCOME)
+                    .map(FinancialTransaction::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
+            List<FinancialTransaction> sales = values.stream().filter(tx -> tx.getType() == FinanceTransactionType.INCOME)
+                    .filter(tx -> "SALE_EVENT".equalsIgnoreCase(tx.getSourceType())).toList();
+            BigDecimal saleIncome = sales.stream().map(FinancialTransaction::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal expense = values.stream().filter(tx -> tx.getType() == FinanceTransactionType.EXPENSE)
+                    .filter(tx -> !"INVENTORY_PURCHASE".equalsIgnoreCase(tx.getSourceType()))
+                    .map(FinancialTransaction::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal productCost = "PHP".equals(entry.getKey()) ? productsConsumed
+                    : (hasProductUsage ? null : BigDecimal.ZERO);
+            BigDecimal batchCost = productCost == null ? null : expense.add(productCost);
+            totals.add(new SelectionReviewPayload.FinanceSummary.CurrencyTotal(entry.getKey(), income, saleIncome,
+                    income.subtract(saleIncome), sales.size(), expense, income.subtract(expense), productCost,
+                    batchCost, batchCost == null ? null : income.subtract(batchCost), values.size(),
+                    !complete || productCost == null));
+        }
+        // Legacy scalar fields are safe only for a single PHP group; older clients assume PHP.
+        var legacy = totals.size() == 1 && "PHP".equals(totals.get(0).currency()) ? totals.get(0) : null;
+        return new SelectionReviewPayload.FinanceSummary(start, end,
+                legacy == null ? null : legacy.recordedIncome(), legacy == null ? null : legacy.saleIncome(),
+                legacy == null ? null : legacy.otherIncome(), legacy == null ? 0 : legacy.saleTransactionCount(),
+                legacy == null ? null : legacy.recordedExpense(), legacy == null ? null : legacy.recordedNetCashFlow(),
+                legacy == null ? null : legacy.productsConsumedCost(), legacy == null ? null : legacy.totalRecordedBatchCost(),
+                legacy == null ? null : legacy.recordedContribution(), posted.size(), !complete,
+                "Currencies are shown separately without conversion. Inventory usage costs use the legacy PHP convention; records may be incomplete.", totals);
     }
 
     private SelectionReviewPayload.DataAvailabilityItem availability(String section, int count,
                                                                       LocalDate latest, String message) {
         return new SelectionReviewPayload.DataAvailabilityItem(section, count == 0 ? "NO_RECORDS" : "AVAILABLE",
                 count, latest, message);
-    }
-
-    private boolean within(Instant timestamp, LocalDate start, LocalDate end) {
-        if (timestamp == null) return false;
-        ZoneId zone = farmZone();
-        Instant from = start.atStartOfDay(zone).toInstant();
-        Instant until = end.plusDays(1).atStartOfDay(zone).toInstant();
-        return !timestamp.isBefore(from) && timestamp.isBefore(until);
     }
 
     private ZoneId farmZone() {
@@ -724,9 +738,14 @@ public class SelectionReviewService {
             }
             if (payload.finance() != null) {
                 document.add(new Paragraph("\nRecorded batch finance"));
-                document.add(new Paragraph("Income: " + payload.finance().recordedIncome()
-                        + " | Expense: " + payload.finance().recordedExpense()
-                        + " | Net cash flow: " + payload.finance().recordedNetCashFlow()));
+                if (payload.finance().currencyTotals() == null) {
+                    document.add(new Paragraph("Historical finance totals unavailable: currency was not recorded in this snapshot."));
+                } else {
+                    for (var total : payload.finance().currencyTotals()) {
+                        document.add(new Paragraph(total.currency() + " | Income: " + total.recordedIncome()
+                                + " | Expense: " + total.recordedExpense() + " | Net cash flow: " + total.recordedNetCashFlow()));
+                    }
+                }
                 document.add(new Paragraph("Recorded cash-flow entries only; this is not accounting profit."));
             }
             document.add(new Paragraph("\nManager review"));

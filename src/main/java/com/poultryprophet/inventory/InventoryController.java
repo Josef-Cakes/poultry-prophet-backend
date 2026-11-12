@@ -23,7 +23,8 @@ public class InventoryController {
     @GetMapping("/products")
     public List<FarmProductResponse> products(@RequestParam(defaultValue = "false") boolean includeInactive,
                                               @AuthenticationPrincipal CustomUserDetails principal) {
-        return service.listProducts(principal.getFarmId(), includeInactive);
+        return service.listProducts(principal.getFarmId(), includeInactive).stream()
+                .map(product -> product.forRole(principal.getUser().getRole())).toList();
     }
 
     @PostMapping("/products")

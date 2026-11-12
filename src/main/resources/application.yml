@@ -26,8 +26,8 @@ spring:
 
   jpa:
     hibernate:
-      ddl-auto: update
-    defer-datasource-initialization: true
+      ddl-auto: validate
+    defer-datasource-initialization: false
     properties:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
@@ -38,7 +38,16 @@ spring:
 
   sql:
     init:
-      mode: always
+      mode: never
+
+  # No legacy migration is automatically replayed. See docs/migrations/README.md.
+  flyway:
+    enabled: false
+    locations: classpath:db/reviewed-migration
+    baseline-on-migrate: false
+    baseline-version: 25
+    validate-on-migrate: true
+    clean-disabled: true
 
 server:
   port: ${PORT:${SERVER_PORT:8080}}

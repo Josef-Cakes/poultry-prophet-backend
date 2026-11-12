@@ -2,6 +2,9 @@ package com.poultryprophet.config;
 
 import com.poultryprophet.realtime.StompAuthChannelInterceptor;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.messaging.Message;
+import org.springframework.messaging.MessageChannel;
+import org.springframework.messaging.support.ChannelInterceptor;
 import org.springframework.messaging.simp.config.ChannelRegistration;
 import org.springframework.messaging.simp.config.MessageBrokerRegistry;
 import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBroker;
@@ -34,6 +37,16 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
         // Dashboards subscribe to /topic/farms/{farmId}/{alerts|indicators}.
         registry.enableSimpleBroker("/topic");
         registry.setApplicationDestinationPrefixes("/app");
+    }
+
+    @Override
+    public void configureClientOutboundChannel(ChannelRegistration registration) {
+        registration.interceptors(new ChannelInterceptor() {
+            @Override
+            public Message<?> preSend(Message<?> message, MessageChannel channel) {
+                return authChannelInterceptor.preSendOutbound(message);
+            }
+        });
     }
 
     @Override

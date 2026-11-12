@@ -21,7 +21,9 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
 
 @ExtendWith(MockitoExtension.class)
 class BatchComparisonServiceTest {
@@ -43,8 +45,8 @@ class BatchComparisonServiceTest {
         when(batchRepository.findByIdAndFarmId(2L, 7L)).thenReturn(Optional.of(older));
         when(eventRepository.findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(anyLong(), any(), any()))
                 .thenReturn(List.of());
-        when(inputRepository.findByFarmIdAndBatchIdOrderByRecordedAtDesc(7L, 1L)).thenReturn(List.of());
-        when(inputRepository.findByFarmIdAndBatchIdOrderByRecordedAtDesc(7L, 2L)).thenReturn(List.of());
+        when(inputRepository.findByFarmIdAndBatchIdAndRecordedAtGreaterThanEqualAndRecordedAtLessThanOrderByRecordedAtDesc(eq(7L), eq(1L), any(), any())).thenReturn(List.of());
+        when(inputRepository.findByFarmIdAndBatchIdAndRecordedAtGreaterThanEqualAndRecordedAtLessThanOrderByRecordedAtDesc(eq(7L), eq(2L), any(), any())).thenReturn(List.of());
         when(selectionSessionService.latestFinalized(anyLong(), anyLong(), any())).thenReturn(null);
 
         BatchComparisonService service = new BatchComparisonService(batchRepository, eventRepository,
@@ -52,6 +54,10 @@ class BatchComparisonServiceTest {
                 new com.poultryprophet.population.PopulationProjectionService(), FIXED_CLOCK);
 
         var result = service.compare(7L, List.of(1L, 2L), 30, "REAL");
+
+        verify(inputRepository).findByFarmIdAndBatchIdAndRecordedAtGreaterThanEqualAndRecordedAtLessThanOrderByRecordedAtDesc(
+                7L, 1L, young.getHatchDate().atStartOfDay(FARM_ZONE).toInstant(),
+                young.getHatchDate().plusDays(10).atStartOfDay(FARM_ZONE).toInstant());
 
         assertThat(result.requestedWindowDays()).isEqualTo(30);
         assertThat(result.effectiveWindowDays()).isEqualTo(10);
@@ -78,8 +84,8 @@ class BatchComparisonServiceTest {
                 .thenReturn(List.of(legacy));
         when(eventRepository.findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(2L, valid.getStartDate(), expectedEnd))
                 .thenReturn(List.of());
-        when(inputRepository.findByFarmIdAndBatchIdOrderByRecordedAtDesc(7L, 1L)).thenReturn(List.of());
-        when(inputRepository.findByFarmIdAndBatchIdOrderByRecordedAtDesc(7L, 2L)).thenReturn(List.of());
+        when(inputRepository.findByFarmIdAndBatchIdAndRecordedAtGreaterThanEqualAndRecordedAtLessThanOrderByRecordedAtDesc(eq(7L), eq(1L), any(), any())).thenReturn(List.of());
+        when(inputRepository.findByFarmIdAndBatchIdAndRecordedAtGreaterThanEqualAndRecordedAtLessThanOrderByRecordedAtDesc(eq(7L), eq(2L), any(), any())).thenReturn(List.of());
         when(selectionSessionService.latestFinalized(anyLong(), anyLong(), any())).thenReturn(null);
 
         BatchComparisonService service = new BatchComparisonService(batchRepository, eventRepository,

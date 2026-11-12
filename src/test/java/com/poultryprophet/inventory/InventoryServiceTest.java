@@ -83,7 +83,7 @@ class InventoryServiceTest {
             value.setId(100L);
             return value;
         });
-        when(financeService.create(anyLong(), anyLong(), any())).thenReturn(
+        when(financeService.createInventoryPurchase(anyLong(), anyLong(), any())).thenReturn(
                 new FinancialTransactionResponse(88L, null, null, null, null, null, null, null, null,
                         null, null, null, null, null, null, null, null));
 
@@ -98,7 +98,7 @@ class InventoryServiceTest {
         assertThat(result.calculatedTotal()).isEqualByComparingTo("1000.00");
         assertThat(result.averageUnitCostAfter()).isEqualByComparingTo("150.000000");
         assertThat(result.inventoryValueAfter()).isEqualByComparingTo("1500.00");
-        verify(financeService).create(anyLong(), anyLong(), argThat(request -> request.amount().compareTo(new BigDecimal("1000.00")) == 0
+        verify(financeService).createInventoryPurchase(anyLong(), anyLong(), argThat(request -> request.amount().compareTo(new BigDecimal("1000.00")) == 0
                 && request.batchId() == null));
     }
 
@@ -109,7 +109,7 @@ class InventoryServiceTest {
         when(movementRepository.findByOperationId(any())).thenReturn(Optional.empty());
         when(productRepository.save(any(FarmProduct.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(movementRepository.save(any(InventoryMovement.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        when(financeService.create(anyLong(), anyLong(), any())).thenReturn(
+        when(financeService.createInventoryPurchase(anyLong(), anyLong(), any())).thenReturn(
                 new FinancialTransactionResponse(89L, null, null, null, null, null, null, null, null,
                         null, null, null, null, null, null, null, null));
 
@@ -163,6 +163,82 @@ class InventoryServiceTest {
         assertThat(result.costStatus()).isEqualTo(InventoryValuationStatus.FREE.name());
         assertThat(result.inventoryValueDelta()).isEqualByComparingTo("0.00");
         verifyNoInteractions(financeService);
+    }
+
+    @Test
+    void rejectsOperationIdFromAnotherFarm() {
+        UUID id = UUID.randomUUID();
+        InventoryMovement existing = new InventoryMovement();
+        existing.setFarmId(99L);
+        existing.setFarmProductId(10L);
+        existing.setMovementType(InventoryMovementType.ADJUSTMENT_IN);
+        when(movementRepository.findByOperationId(id)).thenReturn(Optional.of(existing));
+
+        assertThatThrownBy(() -> new InventoryService(productRepository, movementRepository, batchService, financeService)
+                .adjust(3L, 7L, 10L, new com.poultryprophet.inventory.dto.InventoryAdjustmentRequest(
+                        BigDecimal.ONE, "count", null, id)))
+                .isInstanceOf(com.poultryprophet.common.ConflictException.class);
+    }
+
+    @Test
+    void rejectsAdjustmentReplayWithDifferentQuantity() {
+        UUID id = UUID.randomUUID();
+        InventoryMovement existing = new InventoryMovement();
+        existing.setFarmId(3L);
+        existing.setFarmProductId(10L);
+        existing.setMovementType(InventoryMovementType.ADJUSTMENT_IN);
+        existing.setQuantityDelta(new BigDecimal("1.000"));
+        existing.setReason("count");
+        when(movementRepository.findByOperationId(id)).thenReturn(Optional.of(existing));
+
+        assertThatThrownBy(() -> new InventoryService(productRepository, movementRepository, batchService, financeService)
+                .adjust(3L, 7L, 10L, new com.poultryprophet.inventory.dto.InventoryAdjustmentRequest(
+                        new BigDecimal("2"), "count", null, id)))
+                .isInstanceOf(com.poultryprophet.common.ConflictException.class);
+    }
+
+    @Test
+    void adjustmentReplayTreatsEquivalentDecimalScalesAsEqual() {
+        UUID id = UUID.randomUUID();
+        InventoryMovement existing = new InventoryMovement();
+        existing.setId(50L);
+        existing.setFarmId(3L);
+        existing.setFarmProductId(10L);
+        existing.setMovementType(InventoryMovementType.ADJUSTMENT_IN);
+        existing.setQuantityDelta(new BigDecimal("1.000"));
+        existing.setReason("count");
+        when(movementRepository.findByOperationId(id)).thenReturn(Optional.of(existing));
+
+        var result = new InventoryService(productRepository, movementRepository, batchService, financeService)
+                .adjust(3L, 7L, 10L, new com.poultryprophet.inventory.dto.InventoryAdjustmentRequest(
+                        new BigDecimal("1.0"), "count", null, id));
+        assertThat(result.id()).isEqualTo(50L);
+        verifyNoInteractions(productRepository, financeService);
+    }
+
+    @Test
+    void paidStockInCreatesSystemExpenseThroughRealFinanceService() {
+        var financialRepository = mock(com.poultryprophet.finance.FinancialTransactionRepository.class);
+        var incubationService = mock(com.poultryprophet.incubation.IncubationService.class);
+        var realFinance = new FinanceService(financialRepository, batchService, incubationService, movementRepository);
+        FarmProduct product = product("bag", "0");
+        when(productRepository.findByIdAndFarmIdForUpdate(10L, 3L)).thenReturn(Optional.of(product));
+        when(financialRepository.save(any())).thenAnswer(invocation -> {
+            var transaction = (com.poultryprophet.finance.FinancialTransaction) invocation.getArgument(0);
+            transaction.setId(88L);
+            return transaction;
+        });
+        when(movementRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        UUID id = UUID.randomUUID();
+        var result = new InventoryService(productRepository, movementRepository, batchService, realFinance)
+                .stockIn(3L, 7L, 10L, new com.poultryprophet.inventory.dto.StockInRequest(
+                        new BigDecimal("2"), null, new BigDecimal("15"), null, "Supplier", false, false, null, id, null));
+        assertThat(result.financialTransactionId()).isEqualTo(88L);
+        assertThat(product.getStockOnHand()).isEqualByComparingTo("2");
+        verify(financialRepository).save(argThat(tx -> tx.getFarmId().equals(3L)
+                && tx.getSourceType().equals("INVENTORY_PURCHASE")
+                && tx.getSourceOperationId().equals(id.toString())
+                && tx.getAmount().compareTo(new BigDecimal("30.00")) == 0));
     }
 
     private static FarmProduct product(String unit, String stock) {
