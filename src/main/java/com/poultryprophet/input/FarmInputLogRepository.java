@@ -12,6 +12,8 @@ import com.poultryprophet.inventory.InventoryStatus;
 public interface FarmInputLogRepository extends JpaRepository<FarmInputLog, Long>, JpaSpecificationExecutor<FarmInputLog> {
     List<FarmInputLog> findByFarmIdOrderByRecordedAtDesc(Long farmId);
     List<FarmInputLog> findByFarmIdAndBatchIdOrderByRecordedAtDesc(Long farmId, Long batchId);
+    List<FarmInputLog> findByFarmIdAndBatchIdAndRecordedAtGreaterThanEqualAndRecordedAtLessThanOrderByRecordedAtDesc(
+            Long farmId, Long batchId, Instant start, Instant end);
     List<FarmInputLog> findByFarmIdAndIncubationCycleIdOrderByRecordedAtDesc(Long farmId, Long cycleId);
     List<FarmInputLog> findByFarmIdAndRecordedAtBetweenOrderByRecordedAtAsc(Long farmId, Instant start, Instant end);
     boolean existsByFarmIdAndBatchIdAndCreatedAtAfter(Long farmId, Long batchId, Instant cutoff);

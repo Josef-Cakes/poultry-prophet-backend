@@ -27,7 +27,9 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
 
 @ExtendWith(MockitoExtension.class)
 class SelectionReviewServiceTest {
@@ -59,7 +61,7 @@ class SelectionReviewServiceTest {
                         event(EventType.MISSING, 1, -1),
                         event(EventType.FOUND_RETURNED, 1, 1),
                         event(EventType.MORTALITY, 4, -4)));
-        when(inputRepository.findByFarmIdAndBatchIdOrderByRecordedAtDesc(3L, 7L)).thenReturn(List.of());
+        when(inputRepository.findByFarmIdAndBatchIdAndRecordedAtGreaterThanEqualAndRecordedAtLessThanOrderByRecordedAtDesc(eq(3L), eq(7L), any(), any())).thenReturn(List.of());
         when(incubationRepository.findByFarmIdAndCreatedBatchId(3L, 7L)).thenReturn(List.of());
 
         ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
@@ -69,6 +71,10 @@ class SelectionReviewServiceTest {
         SelectionReviewPayload payload = service.preview(7L, 3L,
                 LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 20),
                 LocalDate.of(2026, 9, 20), false);
+
+        verify(inputRepository).findByFarmIdAndBatchIdAndRecordedAtGreaterThanEqualAndRecordedAtLessThanOrderByRecordedAtDesc(
+                3L, 7L, java.time.Instant.parse("2026-08-31T16:00:00Z"),
+                java.time.Instant.parse("2026-09-20T16:00:00Z"));
 
         assertThat(payload.population().healthRelatedDeaths()).isEqualTo(2);
         assertThat(payload.population().totalDeaths()).isEqualTo(2);
@@ -103,7 +109,7 @@ class SelectionReviewServiceTest {
                         event(EventType.HEALTH_DEATH, 100, -100),
                         event(EventType.HEALTH_DEATH, 120, -120),
                         event(EventType.ACCIDENTAL_DEATH, 5, -5)));
-        when(inputRepository.findByFarmIdAndBatchIdOrderByRecordedAtDesc(3L, 10L)).thenReturn(List.of());
+        when(inputRepository.findByFarmIdAndBatchIdAndRecordedAtGreaterThanEqualAndRecordedAtLessThanOrderByRecordedAtDesc(eq(3L), eq(10L), any(), any())).thenReturn(List.of());
         when(incubationRepository.findByFarmIdAndCreatedBatchId(3L, 10L)).thenReturn(List.of());
 
         ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
@@ -134,7 +140,7 @@ class SelectionReviewServiceTest {
         when(batchService.resolveStage(batch)).thenReturn(new BatchService.StageView(stage, true));
         when(eventRepository.findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(
                 11L, batch.getStartDate(), LocalDate.of(2026, 10, 9))).thenReturn(List.of());
-        when(inputRepository.findByFarmIdAndBatchIdOrderByRecordedAtDesc(3L, 11L)).thenReturn(List.of());
+        when(inputRepository.findByFarmIdAndBatchIdAndRecordedAtGreaterThanEqualAndRecordedAtLessThanOrderByRecordedAtDesc(eq(3L), eq(11L), any(), any())).thenReturn(List.of());
         when(incubationRepository.findByFarmIdAndCreatedBatchId(3L, 11L)).thenReturn(List.of());
 
         BatchSexComposition sex = new BatchSexComposition();
@@ -186,7 +192,7 @@ class SelectionReviewServiceTest {
         when(batchService.resolveStage(batch)).thenReturn(new BatchService.StageView(stage, true));
         when(eventRepository.findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(
                 9L, batch.getStartDate(), today)).thenReturn(List.of(invalidLegacyTotal));
-        when(inputRepository.findByFarmIdAndBatchIdOrderByRecordedAtDesc(3L, 9L)).thenReturn(List.of());
+        when(inputRepository.findByFarmIdAndBatchIdAndRecordedAtGreaterThanEqualAndRecordedAtLessThanOrderByRecordedAtDesc(eq(3L), eq(9L), any(), any())).thenReturn(List.of());
         when(incubationRepository.findByFarmIdAndCreatedBatchId(3L, 9L)).thenReturn(List.of());
 
         ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
@@ -223,7 +229,7 @@ class SelectionReviewServiceTest {
         when(batchService.resolveStage(batch)).thenReturn(new BatchService.StageView(stage, true));
         when(eventRepository.findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(
                 8L, LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 20))).thenReturn(List.of());
-        when(inputRepository.findByFarmIdAndBatchIdOrderByRecordedAtDesc(3L, 8L)).thenReturn(List.of());
+        when(inputRepository.findByFarmIdAndBatchIdAndRecordedAtGreaterThanEqualAndRecordedAtLessThanOrderByRecordedAtDesc(eq(3L), eq(8L), any(), any())).thenReturn(List.of());
         when(incubationRepository.findByFarmIdAndCreatedBatchId(3L, 8L)).thenReturn(List.of());
         when(reviewRepository.countByFarmIdAndBatchId(3L, 8L)).thenReturn(0L);
         when(reviewRepository.save(any(BatchSelectionReview.class))).thenAnswer(invocation -> invocation.getArgument(0));

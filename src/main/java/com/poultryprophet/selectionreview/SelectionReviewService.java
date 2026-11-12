@@ -237,8 +237,10 @@ public class SelectionReviewService {
                 ? events
                 : eventRepository.findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(
                         batch.getId(), batch.getHatchDate(), asOfDate);
-        List<FarmInputLog> products = inputRepository.findByFarmIdAndBatchIdOrderByRecordedAtDesc(farmId, batch.getId())
-                .stream().filter(value -> within(value.getRecordedAt(), periodStart, periodEnd)).toList();
+        List<FarmInputLog> products = inputRepository
+                .findByFarmIdAndBatchIdAndRecordedAtGreaterThanEqualAndRecordedAtLessThanOrderByRecordedAtDesc(
+                        farmId, batch.getId(), periodStart.atStartOfDay(farmZone()).toInstant(),
+                        periodEnd.plusDays(1).atStartOfDay(farmZone()).toInstant());
         Map<Long, InventoryMovement> productMovements = inventoryMovementRepository == null ? Map.of()
                 : inventoryMovementRepository.findByFarmIdAndBatchIdAndOccurredAtBetweenOrderByOccurredAtAsc(
                         farmId, batch.getId(), periodStart.atStartOfDay(farmZone()).toInstant(),
@@ -523,14 +525,6 @@ public class SelectionReviewService {
                                                                       LocalDate latest, String message) {
         return new SelectionReviewPayload.DataAvailabilityItem(section, count == 0 ? "NO_RECORDS" : "AVAILABLE",
                 count, latest, message);
-    }
-
-    private boolean within(Instant timestamp, LocalDate start, LocalDate end) {
-        if (timestamp == null) return false;
-        ZoneId zone = farmZone();
-        Instant from = start.atStartOfDay(zone).toInstant();
-        Instant until = end.plusDays(1).atStartOfDay(zone).toInstant();
-        return !timestamp.isBefore(from) && timestamp.isBefore(until);
     }
 
     private ZoneId farmZone() {

@@ -1,7 +1,8 @@
 # Improvement plan: implementation status
 
-This work is not ready for production rollout. The checked-in changes are uncommitted and the
-currently running local API may still be an older process. No supplied Supabase data has been
+This work is not ready for production rollout. The prior changes were committed on the
+`poultry-project-improvements` branches; subsequent work may be uncommitted. The currently
+running local API may still be an older process. No supplied Supabase data has been
 modified by the validation tests.
 
 ## Implemented and exercised
@@ -35,7 +36,9 @@ modified by the validation tests.
    reversal, and protection against duplicate posting of ambiguous historical sales. Current
    sale events can still post income immediately.
 2. Add a correction/resubmission and authenticated manager-review workflow for rejected or
-   conflicting offline records. Verify vaccination replay and all replay operations against
+   conflicting offline records. The sync indicator now displays server-provided reasons while
+   leaving those records on the device; this is not a manager-review or correction workflow.
+   Verify vaccination replay and all replay operations against
    PostgreSQL, including failure rollback and duplicate delivery.
 3. Add login and refresh throttling after establishing a trustworthy client-identity boundary;
    see `AUTH_THROTTLING_TRUST_BOUNDARY.md`.
