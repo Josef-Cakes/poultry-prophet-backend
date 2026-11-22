@@ -3,6 +3,7 @@ package com.poultryprophet.batch.dto;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 
 import java.time.LocalDate;
 import java.util.List;
@@ -15,17 +16,26 @@ public record CreateBatchRequest(
         // Retained for backwards compatibility with older clients.
         Long stageId,
         // Blueprint 5.2/5.3: descriptive metadata. Bloodline is collected but NOT scored.
-        String bloodline,
+        @NotBlank(message = "Bloodline is required") @Size(max = 255) String bloodline,
         String source,
         List<Long> handlerUserIds,
         @NotNull LocalDate hatchDate,
-        @NotNull LocalDate farmEntryDate
+        @NotNull LocalDate farmEntryDate,
+        LocalDate derbyDate
 ) {
+
+    /** Compatibility constructor for callers without a scheduled derby date. */
+    public CreateBatchRequest(String name, Integer initialPopulation, LocalDate startDate, Long stageId,
+                              String bloodline, String source, List<Long> handlerUserIds,
+                              LocalDate hatchDate, LocalDate farmEntryDate) {
+        this(name, initialPopulation, startDate, stageId, bloodline, source, handlerUserIds,
+                hatchDate, farmEntryDate, null);
+    }
 
     /** Compatibility constructor for older internal callers and tests. */
     public CreateBatchRequest(String name, Integer initialPopulation, LocalDate startDate, Long stageId,
                               String bloodline, String source, List<Long> handlerUserIds) {
         this(name, initialPopulation, startDate, stageId, bloodline, source, handlerUserIds,
-                startDate, startDate);
+                startDate, startDate, null);
     }
 }

@@ -123,6 +123,7 @@ public record SelectionReviewPayload(
             BigDecimal recordedContribution,
             long postedTransactionCount,
             boolean recordsMayBeIncomplete,
+            long unvaluedUsageCount,
             String limitation,
             List<CurrencyTotal> currencyTotals
     ) {
@@ -140,7 +141,7 @@ public record SelectionReviewPayload(
                               boolean recordsMayBeIncomplete, String limitation) {
             this(startDate, endDate, recordedIncome, BigDecimal.ZERO, recordedIncome, 0L,
                     recordedExpense, recordedNetCashFlow, productsConsumedCost, totalRecordedBatchCost,
-                    recordedContribution, postedTransactionCount, recordsMayBeIncomplete, limitation, null);
+                    recordedContribution, postedTransactionCount, recordsMayBeIncomplete, 0, limitation, null);
         }
     }
 

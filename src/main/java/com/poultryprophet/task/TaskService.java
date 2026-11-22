@@ -385,6 +385,7 @@ public class TaskService {
         if (request.status() == TaskStatus.COMPLETED) {
             throw new BadRequestException("Managers monitor tasks; handlers complete them");
         }
+        ensureReviewFollowUpCanReopen(task, request.status());
         if (request.status() != null && request.status() != task.getStatus()) applyStatus(task, request.status(), managerId, task.getCompletionNote());
         task.setUpdatedAt(Instant.now(applicationClock));
         return response(taskRepository.save(task));
@@ -395,7 +396,7 @@ public class TaskService {
                                      UpdateTaskStatusRequest request) {
         HandlerTask task = taskRepository.findByIdAndFarmIdForUpdate(id, farmId)
                 .orElseThrow(() -> new NotFoundException("Task " + id + " not found"));
-        if (manager && request.status() == TaskStatus.COMPLETED) {
+        if (manager && request.status() == TaskStatus.COMPLETED && !"SELECTION_REVIEW_FOLLOWUP".equals(task.getSourceType())) {
             throw new BadRequestException("Managers monitor tasks; handlers complete them");
         }
         if (!canViewTask(task, farmId, actorId, manager)) {
@@ -421,9 +422,50 @@ public class TaskService {
         if ("VACCINATION_PLAN".equals(task.getSourceType()) && request.status() == TaskStatus.COMPLETED) {
             throw new BadRequestException("Vaccination tasks are completed through the vaccination confirmation action");
         }
+        ensureReviewFollowUpCanReopen(task, request.status());
         applyStatus(task, request.status(), actorId, request.note(), request.operationId(), request.occurredAt());
         task.setUpdatedAt(Instant.now(applicationClock));
         return response(taskRepository.save(task));
+    }
+
+    private void ensureReviewFollowUpCanReopen(HandlerTask task, TaskStatus target) {
+        var open = List.of(TaskStatus.TODO, TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED);
+        if (!"SELECTION_REVIEW_FOLLOWUP".equals(task.getSourceType()) || target == null || !open.contains(target)
+                || open.contains(task.getStatus())) return;
+        if (taskRepository.findFirstByFarmIdAndBatchIdAndSourceTypeAndStatusInOrderByIdAsc(
+                task.getFarmId(), task.getBatchId(), task.getSourceType(), open).isPresent()) {
+            throw new ConflictException("This batch already has an open follow-up reminder.");
+        }
+    }
+
+    /** Called while the batch row is locked by report finalization. */
+    @Transactional
+    public void scheduleReviewFollowUp(Long farmId, Long batchId, Long managerId, Long reviewId,
+                                       LocalDate date, java.time.ZoneId zone) {
+        var open = List.of(TaskStatus.TODO, TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED);
+        HandlerTask existing = taskRepository
+                .findFirstByFarmIdAndBatchIdAndSourceTypeAndStatusInOrderByIdAsc(farmId, batchId,
+                        "SELECTION_REVIEW_FOLLOWUP", open)
+                .flatMap(task -> taskRepository.findByIdAndFarmIdForUpdate(task.getId(), farmId))
+                .filter(task -> open.contains(task.getStatus())).orElse(null);
+        Instant dueAt = date.plusDays(1).atStartOfDay(zone).toInstant().minusSeconds(1);
+        if (existing == null) {
+            HandlerTask task = new HandlerTask();
+            task.setFarmId(farmId); task.setBatchId(batchId); task.setAssignedManagerId(managerId);
+            task.setAssignmentScope("BATCH_TEAM"); task.setSourceType("SELECTION_REVIEW_FOLLOWUP");
+            task.setSourceId(reviewId); task.setTitle("Follow up batch review");
+            task.setInstructions("Review the batch and mark this reminder done after the follow-up.");
+            task.setDueAt(dueAt); task.setUpdatedAt(Instant.now(applicationClock));
+            HandlerTask saved = taskRepository.save(task);
+            recordStatus(saved, managerId, TaskStatus.TODO, "Follow-up scheduled from review #" + reviewId);
+        } else {
+            Instant previousDue = existing.getDueAt();
+            existing.setDueAt(dueAt); existing.setSourceId(reviewId);
+            existing.setUpdatedAt(Instant.now(applicationClock));
+            taskRepository.save(existing);
+            recordStatus(existing, managerId, existing.getStatus(), existing.getStatus(),
+                    "Follow-up rescheduled from " + previousDue + " to " + dueAt + " by review #" + reviewId, null, null);
+        }
     }
 
     /** Internal fixture/system path; not exposed as a manager completion endpoint. */

@@ -15,7 +15,8 @@ import java.util.List;
 @RequestMapping("/api/batches/{batchId}/sex-composition")
 public class BatchSexCompositionController {
     private final BatchSexCompositionService service;
-    public BatchSexCompositionController(BatchSexCompositionService service) { this.service = service; }
+    private final com.poultryprophet.sync.RemainingCommandService commands;
+    public BatchSexCompositionController(BatchSexCompositionService service, com.poultryprophet.sync.RemainingCommandService commands) { this.service = service; this.commands = commands; }
     @GetMapping public SexCompositionResponse current(@PathVariable Long batchId, @AuthenticationPrincipal CustomUserDetails principal) { return service.current(batchId, principal.getFarmId()); }
     @GetMapping("/context") public SexCompositionContextResponse context(
             @PathVariable Long batchId,
@@ -26,6 +27,7 @@ public class BatchSexCompositionController {
     @GetMapping("/history") public List<SexCompositionResponse> history(@PathVariable Long batchId, @AuthenticationPrincipal CustomUserDetails principal) { return service.history(batchId, principal.getFarmId()); }
     @PostMapping @org.springframework.security.access.prepost.PreAuthorize("hasAnyRole('MANAGER','HANDLER')")
     public SexCompositionResponse record(@PathVariable Long batchId, @Valid @RequestBody CreateSexCompositionRequest request, @AuthenticationPrincipal CustomUserDetails principal) {
-        return service.record(batchId, principal.getFarmId(), principal.getId(), request);
+        return request.operationId() == null ? service.record(batchId, principal.getFarmId(), principal.getId(), request)
+                : commands.composition(batchId, principal.getFarmId(), principal.getId(), request).response();
     }
 }

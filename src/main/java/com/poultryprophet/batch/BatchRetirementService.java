@@ -18,7 +18,7 @@ import java.util.Map;
 
 /**
  * Owns the destructive/lifecycle boundary for batches. Archiving is the normal reversible
- * action; deletion is deliberately conservative and only applies to an empty archived batch.
+ * action; permanent deletion is restricted to archived batches and removes their owned history.
  */
 @Service
 public class BatchRetirementService {
@@ -106,14 +106,40 @@ public class BatchRetirementService {
             throw new BadRequestException("Type the exact batch name to permanently delete it");
         }
         BatchRetirementImpactResponse impact = impactFor(batch);
-        if (!impact.canDelete()) {
-            throw new ConflictException("BATCH_HAS_RECORDS: this batch contains records and must remain archived");
-        }
         audit(batch, farmId, "DELETE", BatchStatus.ARCHIVED, null,
                 clean(request == null ? null : request.reason()), userId,
-                "deletedEmptyBatch=true");
+                "{\"deletedArchivedBatch\":true,\"linkedRecordCount\":"
+                        + impact.recordCounts().values().stream().mapToLong(Long::longValue).sum() + "}");
+        // Delete children before their parents. All statements share the batch lock and
+        // transaction; any failure rolls back the complete deletion, including its audit.
+        entityManager.flush();
+        for (String sql : List.of(
+                "delete from handler_task_status_history where task_id in (select id from handler_task where batch_id = :batchId)",
+                "delete from batch_selection_session_criterion where selection_session_id in (select id from batch_selection_session where batch_id = :batchId)",
+                "delete from ranging_record where bird_id in (select id from bird where batch_id = :batchId)",
+                "delete from selection_record where batch_id = :batchId or bird_id in (select id from bird where batch_id = :batchId)",
+                "delete from bird_score where batch_id = :batchId or bird_id in (select id from bird where batch_id = :batchId)",
+                "delete from alert where batch_id = :batchId",
+                "delete from indicator where batch_id = :batchId",
+                "delete from daily_record where batch_id = :batchId",
+                "delete from batch_vaccination_plan_item where batch_id = :batchId",
+                "delete from handler_task where batch_id = :batchId",
+                "delete from batch_sex_composition where batch_id = :batchId",
+                "delete from inventory_movement where batch_id = :batchId or farm_input_log_id in (select id from farm_input_log where batch_id = :batchId) or financial_transaction_id in (select id from farm_financial_transaction where batch_id = :batchId)",
+                "delete from farm_input_log where batch_id = :batchId",
+                "delete from farm_financial_transaction where batch_id = :batchId",
+                "delete from batch_event where batch_id = :batchId",
+                "delete from batch_selection_session where batch_id = :batchId",
+                "delete from batch_selection_review where batch_id = :batchId",
+                "delete from report where batch_id = :batchId",
+                "delete from bird where batch_id = :batchId",
+                // The originating cycle is farm history of eggs, not owned by its batch.
+                "update incubation_cycle set created_batch_id = null where created_batch_id = :batchId")) {
+            entityManager.createNativeQuery(sql).setParameter("batchId", batchId).executeUpdate();
+        }
         assignmentRepository.deleteAll(assignmentRepository.findByBatchId(batchId));
         batchRepository.delete(batch);
+        batchRepository.flush();
     }
 
     private BatchRetirementImpactResponse impactFor(Batch batch) {
@@ -133,17 +159,16 @@ public class BatchRetirementService {
         counts.put("selectionSessions", count("select count(*) from batch_selection_session where batch_id = :batchId", batch.getId()));
         counts.put("selectionReviews", count("select count(*) from batch_selection_review where batch_id = :batchId", batch.getId()));
         counts.put("reports", count("select count(*) from report where batch_id = :batchId", batch.getId()));
+        counts.put("sexComposition", count("select count(*) from batch_sex_composition where batch_id = :batchId", batch.getId()));
+        counts.put("vaccinationPlans", count("select count(*) from batch_vaccination_plan_item where batch_id = :batchId", batch.getId()));
         counts.put("incubationLinks", count("select count(*) from incubation_cycle where created_batch_id = :batchId", batch.getId()));
 
         long openTasks = count("select count(*) from handler_task where batch_id = :batchId and status not in ('COMPLETED','CANCELLED')", batch.getId());
         long activeAlerts = count("select count(*) from alert where batch_id = :batchId and acknowledged_at is null", batch.getId());
-        long records = counts.values().stream().mapToLong(Long::longValue).sum();
         List<String> blockers = new ArrayList<>();
         if (batch.getStatus() != BatchStatus.ARCHIVED) blockers.add("Archive the batch before permanent deletion.");
-        if (openTasks > 0) blockers.add("Complete or cancel " + openTasks + " open batch task(s).");
-        if (records > 0) blockers.add("This batch contains farm records and must remain archived.");
         return new BatchRetirementImpactResponse(batch.getId(), batch.getName(), batch.getStatus(),
-                openTasks == 0, batch.getStatus() == BatchStatus.ARCHIVED && openTasks == 0 && records == 0,
+                openTasks == 0, batch.getStatus() == BatchStatus.ARCHIVED,
                 openTasks, activeAlerts, counts, blockers);
     }
 

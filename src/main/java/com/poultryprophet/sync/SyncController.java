@@ -20,6 +20,8 @@ public class SyncController {
         this.syncService = syncService;
     }
 
+    /** Legacy compatibility only; changed records are never clock-authorized overwrites. */
+    @Deprecated
     @PostMapping("/batch")
     public SyncBatchResponse syncBatch(@Valid @RequestBody SyncBatchRequest request,
                                        @AuthenticationPrincipal CustomUserDetails principal) {

@@ -8,15 +8,25 @@ public record FarmProductResponse(
         Long id, Long farmId, InputProductType productType, String brandName, String productName,
         String packageDescription, String stockUnit, BigDecimal stockOnHand, BigDecimal reorderLevel,
         BigDecimal averageUnitCost, BigDecimal inventoryValue, String currency, String valuationStatus,
-        boolean lowStock, boolean allowFractionalQuantity, boolean active
+        boolean lowStock, boolean allowFractionalQuantity, boolean active, boolean demoStockHistory
 ) {
+    public FarmProductResponse(Long id, Long farmId, InputProductType productType, String brandName, String productName,
+            String packageDescription, String stockUnit, BigDecimal stockOnHand, BigDecimal reorderLevel,
+            BigDecimal averageUnitCost, BigDecimal inventoryValue, String currency, String valuationStatus,
+            boolean lowStock, boolean allowFractionalQuantity, boolean active) {
+        this(id, farmId, productType, brandName, productName, packageDescription, stockUnit, stockOnHand, reorderLevel,
+                averageUnitCost, inventoryValue, currency, valuationStatus, lowStock, allowFractionalQuantity, active, false);
+    }
     public FarmProductResponse forRole(com.poultryprophet.user.Role role) {
         if (role == com.poultryprophet.user.Role.MANAGER) return this;
         return new FarmProductResponse(id, farmId, productType, brandName, productName, packageDescription,
                 stockUnit, stockOnHand, reorderLevel, null, null, null, null, lowStock,
-                allowFractionalQuantity, active);
+                allowFractionalQuantity, active, demoStockHistory);
     }
     public static FarmProductResponse from(FarmProduct product) {
+        return from(product, false);
+    }
+    public static FarmProductResponse from(FarmProduct product, boolean demoStockHistory) {
         boolean low = product.getReorderLevel() != null
                 && product.getStockOnHand().compareTo(product.getReorderLevel()) <= 0;
         BigDecimal inventoryValue = product.getAverageUnitCost() == null ? null
@@ -25,6 +35,6 @@ public record FarmProductResponse(
                 product.getBrandName(), product.getProductName(), product.getPackageDescription(),
                 product.getStockUnit(), product.getStockOnHand(), product.getReorderLevel(), product.getAverageUnitCost(),
                 inventoryValue, product.getCurrency(), product.getValuationStatus() == null ? null : product.getValuationStatus().name(), low,
-                product.isAllowFractionalQuantity(), product.isActive());
+                product.isAllowFractionalQuantity(), product.isActive(), demoStockHistory);
     }
 }

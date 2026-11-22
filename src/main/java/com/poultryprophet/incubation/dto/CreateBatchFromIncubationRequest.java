@@ -4,5 +4,7 @@ import jakarta.validation.constraints.NotNull;
 
 import java.time.LocalDate;
 
-public record CreateBatchFromIncubationRequest(@NotNull LocalDate farmEntryDate) {
+public record CreateBatchFromIncubationRequest(@NotNull LocalDate farmEntryDate,
+                                               String bloodline,
+                                               LocalDate derbyDate) {
 }

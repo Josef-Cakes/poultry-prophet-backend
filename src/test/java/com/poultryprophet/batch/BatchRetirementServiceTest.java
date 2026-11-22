@@ -68,6 +68,53 @@ class BatchRetirementServiceTest {
         verifyNoInteractions(auditRepository);
     }
 
+    @Test
+    void deletesArchivedBatchWithHistoryInDependencyOrderAndKeepsAudit() {
+        Batch batch = batch(); batch.setStatus(BatchStatus.ARCHIVED);
+        when(batchService.requireBatchForUpdate(7L, 3L)).thenReturn(batch);
+        when(entityManager.createNativeQuery(anyString())).thenReturn(query);
+        when(query.setParameter("batchId", 7L)).thenReturn(query);
+        when(query.getSingleResult()).thenReturn(2L);
+        when(assignmentRepository.findByBatchId(7L)).thenReturn(java.util.List.of());
+        new BatchRetirementService(batchRepository, assignmentRepository, auditRepository,
+                batchService, entityManager).delete(7L, 3L, 11L,
+                new com.poultryprophet.batch.dto.DeleteBatchRequest("Validation batch", "Test cleanup"));
+        var order = inOrder(entityManager, batchRepository);
+        order.verify(entityManager).createNativeQuery(startsWith("delete from handler_task_status_history"));
+        order.verify(entityManager).createNativeQuery(startsWith("delete from batch_selection_session_criterion"));
+        order.verify(entityManager).createNativeQuery(startsWith("delete from alert"));
+        order.verify(entityManager).createNativeQuery(startsWith("delete from indicator"));
+        order.verify(entityManager).createNativeQuery(startsWith("delete from daily_record"));
+        order.verify(entityManager).createNativeQuery(startsWith("delete from batch_selection_session where"));
+        order.verify(entityManager).createNativeQuery(startsWith("delete from batch_selection_review"));
+        order.verify(batchRepository).delete(batch);
+        verify(auditRepository).save(argThat(row -> row.getAction().equals("DELETE") && row.getMetadataJson().contains("deletedArchivedBatch")));
+        verify(entityManager).createNativeQuery(startsWith("update incubation_cycle set created_batch_id = null"));
+    }
+
+    @Test
+    void rejectsPermanentDeletionOfActiveBatch() {
+        when(batchService.requireBatchForUpdate(7L, 3L)).thenReturn(batch());
+        assertThatThrownBy(() -> new BatchRetirementService(batchRepository, assignmentRepository,
+                auditRepository, batchService, entityManager).delete(7L, 3L, 11L,
+                new com.poultryprophet.batch.dto.DeleteBatchRequest("Validation batch", null)))
+                .isInstanceOf(ConflictException.class).hasMessageContaining("BATCH_MUST_BE_ARCHIVED");
+        verifyNoInteractions(entityManager, auditRepository);
+        verify(batchRepository, never()).delete(any());
+    }
+
+    @Test
+    void rejectsDeletionWhenNameDoesNotMatch() {
+        Batch batch = batch(); batch.setStatus(BatchStatus.ARCHIVED);
+        when(batchService.requireBatchForUpdate(7L, 3L)).thenReturn(batch);
+        assertThatThrownBy(() -> new BatchRetirementService(batchRepository, assignmentRepository,
+                auditRepository, batchService, entityManager).delete(7L, 3L, 11L,
+                new com.poultryprophet.batch.dto.DeleteBatchRequest("Wrong", null)))
+                .isInstanceOf(com.poultryprophet.common.BadRequestException.class);
+        verifyNoInteractions(entityManager, auditRepository);
+        verify(batchRepository, never()).delete(any());
+    }
+
     private static Batch batch() {
         Batch batch = new Batch();
         batch.setId(7L);

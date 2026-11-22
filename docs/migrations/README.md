@@ -23,8 +23,9 @@ discrepancies.
 ## Reviewed track and version 15
 
 Flyway dependencies are installed, but its configured location is only
-`classpath:db/reviewed-migration`, which contains the proposed V26 credential-version and V27
-offline daily-receipt migrations. `baseline-on-migrate` is false,
+`classpath:db/reviewed-migration`, which contains reviewed V26–V33: credential versions, daily receipts, report-linked
+selection sessions, derby dates, transfer population safeguards, unique open review
+follow-ups, shared command receipts, and backend-only application table access. `baseline-on-migrate` is false,
 `baseline-version` is 25, validation is enabled, and clean is disabled. Flyway is disabled
 by default and explicitly in Render and the validation profile. The first reviewed migration
 must have a unique integer version of **26 or higher**; `python scripts/check-migration-track.py`
@@ -74,3 +75,55 @@ Fresh production databases are blocked until a separately reviewed, reproducible
 and upgrade path exist. Do not use `schema.sql`, Hibernate `update`, or baseline an empty
 database as a substitute. The existing V2 mortality repair and inventory runner have separate
 backup, preview, and approval requirements; their presence does not authorize execution.
+
+## Proposed V32 shared command receipt boundary
+
+V32 adds a server-only `offline_command_receipt` table for selection draft update and
+vaccination schedule commands. It is additive; existing domain IDs, old schedule receipts,
+and V27 daily receipts remain untouched. Do not backfill hashes from mutable current drafts.
+See [the receipt contract](../offline-command-receipts.md) for exact identity/legacy handling.
+
+`APP_COMMAND_RECEIPTS_ENABLED` remains false until the target is audited, migration/privileges
+are reviewed and rehearsed, and the owner approves deployment. The new table is not a JPA
+entity and is not added to `schema.sql`; startup cannot silently create it. No live migration
+is authorized by implementing this source change. Disabling the gate retains protected queued
+commands with RETRYABLE/503 responses. It does not route them through an unsafe legacy write.
+
+Rehearse V32 and a second Flyway migrate on a disposable restored copy. Verify one effect under
+concurrent duplicate UUIDs, rollback of receipt plus domain work, original outcome after lost
+responses, and opaque conflicts for changed scope/payload. Rehearse the backend database role
+with RLS/privileges before enabling; browser API roles must not read receipt payloads. No TTL or
+receipt cleanup is approved. A rollback must retain the new receipt evidence and avoid routing
+already accepted commands through an older unprotected application build.
+
+
+## Existing Supabase target rehearsal — November 22, 2026
+
+See [release verification](../RELEASE_VERIFICATION_2026-11-22.md). The existing target
+has no Flyway history; the audited baseline is V25. A private public-schema backup
+was restored into isolated PostgreSQL 17, V26–V33 applied successfully, a second
+migrate applied zero changes, and every original table row count remained unchanged.
+The user explicitly approved rollout on November 22, 2026. The existing Supabase
+target was then baselined at V25 and upgraded through V33; validation and replay
+checks passed, and all 34 original table row counts were preserved. A fresh private
+backup was taken immediately before applying the rollout. Run
+`scripts/release-preflight.sql` read-only before future operations.
+
+V33 enables RLS and removes PUBLIC/anon/authenticated access to application tables.
+Spring Boot remains the authorization boundary. The audited backend database role
+has BYPASSRLS; browser roles must have no application-table policies or grants.
+Do not add broad browser policies to work around deployment failures.
+
+After approval, explicitly baseline the audited nonempty public schema at V25 using
+only `db/reviewed-migration`; then migrate V26–V33 and validate. Never scan the legacy
+track, repair checksums, or enable automatic baselining. Recheck row counts, history,
+RLS, browser privileges, and Spring Hibernate `validate` before enabling command receipts.
+Enable `APP_COMMAND_RECEIPTS_ENABLED=true` only for the matching verified backend;
+verify `/api/version` reports command receipts and schema readiness. Until then,
+protected queued commands must stay on the device with retryable responses.
+
+Keep the additive receipt tables and records when reverting application binaries.
+Do not revert to an older write path that ignores receipts. If recovery requires
+restoration, pause all writers and restore into a separate database first; reconcile
+post-backup writes before any cutover. Retain the private schema/ACL dump so grant
+changes can be reviewed exactly; never regrant anonymous application access as a shortcut.

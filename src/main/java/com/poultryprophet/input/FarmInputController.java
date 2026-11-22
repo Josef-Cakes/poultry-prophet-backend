@@ -23,16 +23,19 @@ public class FarmInputController {
 
     private final FarmInputService service;
 
-    public FarmInputController(FarmInputService service) {
+    private final com.poultryprophet.sync.RemainingCommandService commands;
+    public FarmInputController(FarmInputService service, com.poultryprophet.sync.RemainingCommandService commands) {
         this.service = service;
+        this.commands = commands;
     }
 
     @PostMapping
     public ResponseEntity<FarmInputLogResponse> create(@Valid @RequestBody CreateFarmInputRequest request,
                                                        @AuthenticationPrincipal CustomUserDetails principal) {
-        return ResponseEntity.status(HttpStatus.CREATED).body(service.create(
-                principal.getFarmId(), principal.getId(), principal.getUser().getRole(), request)
-                .forRole(principal.getUser().getRole()));
+        var saved = request.operationId() == null
+                ? service.create(principal.getFarmId(), principal.getId(), principal.getUser().getRole(), request)
+                : commands.input(principal.getFarmId(), principal.getId(), principal.getUser().getRole(), request, null).response();
+        return ResponseEntity.status(HttpStatus.CREATED).body(saved.forRole(principal.getUser().getRole()));
     }
 
     @GetMapping

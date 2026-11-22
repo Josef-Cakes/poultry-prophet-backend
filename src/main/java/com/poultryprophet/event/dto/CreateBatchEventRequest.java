@@ -23,7 +23,9 @@ public record CreateBatchEventRequest(
         Integer populationDelta,
         SexAllocation sexAllocation,
         Instant occurredAt,
-        @Valid SaleDetails saleDetails
+        @Valid SaleDetails saleDetails,
+        String deathObservation,
+        String deathSigns
 ) {
     public record SaleDetails(
             @jakarta.validation.constraints.DecimalMin(value = "0.01") BigDecimal amount,
@@ -80,6 +82,23 @@ public record CreateBatchEventRequest(
                                    Integer populationDelta,
                                    SexAllocation sexAllocation) {
         this(eventDate, eventType, title, severityLabel, affectedCount, details, tags,
-                operationId, populationDelta, sexAllocation, null, null);
+                operationId, populationDelta, sexAllocation, null, null, null, null);
+    }
+
+    /** Preserve existing Java callers while the structured observation fields are optional. */
+    public CreateBatchEventRequest(LocalDate eventDate,
+                                   EventType eventType,
+                                   String title,
+                                   String severityLabel,
+                                   int affectedCount,
+                                   String details,
+                                   String tags,
+                                   UUID operationId,
+                                   Integer populationDelta,
+                                   SexAllocation sexAllocation,
+                                   Instant occurredAt,
+                                   SaleDetails saleDetails) {
+        this(eventDate, eventType, title, severityLabel, affectedCount, details, tags,
+                operationId, populationDelta, sexAllocation, occurredAt, saleDetails, null, null);
     }
 }

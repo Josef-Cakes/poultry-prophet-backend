@@ -19,7 +19,8 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/api/tasks")
 public class TaskController {
     private final TaskService service;
-    public TaskController(TaskService service) { this.service = service; }
+    private final com.poultryprophet.sync.RemainingCommandService commands;
+    public TaskController(TaskService service, com.poultryprophet.sync.RemainingCommandService commands) { this.service = service; this.commands = commands; }
 
     @PostMapping
     @PreAuthorize("hasRole('MANAGER')")
@@ -102,6 +103,7 @@ public class TaskController {
     public TaskResponse status(@PathVariable Long id, @Valid @RequestBody UpdateTaskStatusRequest request,
                                @AuthenticationPrincipal CustomUserDetails principal) {
         boolean manager = principal.getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("ROLE_MANAGER"));
-        return service.updateStatus(id, principal.getFarmId(), principal.getId(), manager, request);
+        return request.operationId() == null ? service.updateStatus(id, principal.getFarmId(), principal.getId(), manager, request)
+                : commands.task(id, principal.getFarmId(), principal.getId(), manager, request, null).response();
     }
 }

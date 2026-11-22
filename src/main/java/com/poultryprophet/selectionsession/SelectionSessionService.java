@@ -6,9 +6,17 @@ import com.poultryprophet.common.BadRequestException;
 import com.poultryprophet.common.NotFoundException;
 import com.poultryprophet.event.BatchEvent;
 import com.poultryprophet.event.BatchEventRepository;
+import com.poultryprophet.finance.FinancialTransactionRepository;
+import com.poultryprophet.input.FarmInputLogRepository;
 import com.poultryprophet.population.PopulationProjection;
 import com.poultryprophet.population.PopulationProjectionService;
+import com.poultryprophet.selectionreview.BatchSelectionReview;
+import com.poultryprophet.selectionreview.BatchSelectionReviewRepository;
+import com.poultryprophet.selectionreview.ManagerReviewStatus;
+import com.poultryprophet.selectionreview.SelectionReviewStatus;
+import com.poultryprophet.sexcomposition.BatchSexCompositionRepository;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -35,20 +43,42 @@ public class SelectionSessionService {
 
     private final BatchSelectionSessionRepository repository;
     private final BatchEventRepository eventRepository;
+    private final FarmInputLogRepository inputRepository;
+    private final FinancialTransactionRepository financeRepository;
+    private final BatchSexCompositionRepository sexCompositionRepository;
+    private final BatchSelectionReviewRepository reviewRepository;
     private final BatchService batchService;
     private final PopulationProjectionService populationProjectionService;
     private final ZoneId farmZone;
 
+    @Autowired
     public SelectionSessionService(BatchSelectionSessionRepository repository,
                                    BatchEventRepository eventRepository,
+                                   FarmInputLogRepository inputRepository,
+                                   FinancialTransactionRepository financeRepository,
+                                   BatchSexCompositionRepository sexCompositionRepository,
+                                   BatchSelectionReviewRepository reviewRepository,
                                    BatchService batchService,
                                    PopulationProjectionService populationProjectionService,
                                    @Value("${app.time-zone:Asia/Manila}") String timeZone) {
         this.repository = repository;
         this.eventRepository = eventRepository;
+        this.inputRepository = inputRepository;
+        this.financeRepository = financeRepository;
+        this.sexCompositionRepository = sexCompositionRepository;
+        this.reviewRepository = reviewRepository;
         this.batchService = batchService;
         this.populationProjectionService = populationProjectionService;
         this.farmZone = ZoneId.of(timeZone);
+    }
+
+    /** Compatibility constructor for focused legacy tests. Production always uses the linked-review constructor. */
+    public SelectionSessionService(BatchSelectionSessionRepository repository,
+                                   BatchEventRepository eventRepository,
+                                   BatchService batchService,
+                                   PopulationProjectionService populationProjectionService,
+                                   String timeZone) {
+        this(repository, eventRepository, null, null, null, null, batchService, populationProjectionService, timeZone);
     }
 
     @Transactional
@@ -73,6 +103,8 @@ public class SelectionSessionService {
         }
 
         validateCounts(batch, safe, false, selectionDate);
+        requireLinkedReview(batchId, farmId, safe.selectionReviewId(), selectionDate,
+                safe.sourceDataAcknowledged(), false);
         if (supersedesSessionId != null) {
             repository.findByIdAndFarmIdAndBatchId(supersedesSessionId, farmId, batchId)
                     .orElseThrow(() -> new NotFoundException("Selection session " + supersedesSessionId + " not found"));
@@ -81,6 +113,8 @@ public class SelectionSessionService {
         BatchSelectionSession session = new BatchSelectionSession();
         session.setFarmId(farmId);
         session.setBatchId(batchId);
+        session.setSelectionReviewId(safe.selectionReviewId());
+        session.setSourceDataAcknowledged(safe.sourceDataAcknowledged());
         session.setReviewerId(reviewerId);
         session.setSelectionDate(selectionDate);
         session.setEvaluatedCount(safe.evaluatedCount());
@@ -121,8 +155,19 @@ public class SelectionSessionService {
             throw new BadRequestException("Only a draft selection session can be edited");
         }
         CreateSelectionSessionRequest safe = requireRequest(request);
+        if (safe.expectedVersion() != null && safe.expectedVersion() != session.getVersion()) {
+            throw new com.poultryprophet.common.ConflictException("This selection draft changed. Review the current version before applying a new edit.");
+        }
         LocalDate selectionDate = safe.selectionDate() == null ? session.getSelectionDate() : safe.selectionDate();
         validateCounts(batch, safe, false, selectionDate);
+        if (session.getSelectionReviewId() != null && !Objects.equals(session.getSelectionReviewId(), safe.selectionReviewId())) {
+            throw new BadRequestException("A selection draft must remain linked to the report it started from");
+        }
+        if (safe.selectionReviewId() != null) {
+            requireLinkedReview(batchId, farmId, safe.selectionReviewId(), selectionDate,
+                    safe.sourceDataAcknowledged(), false);
+            session.setSelectionReviewId(safe.selectionReviewId());
+        }
         session.setSelectionDate(selectionDate);
         session.setEvaluatedCount(safe.evaluatedCount());
         session.setAcceptedCount(safe.acceptedCount());
@@ -132,17 +177,26 @@ public class SelectionSessionService {
         session.setCriterionCodes(normalizeCriteria(safe.criterionCodes()));
         session.setCriteriaNotes(clean(safe.criteriaNotes()));
         session.setSessionNotes(clean(safe.sessionNotes()));
+        session.setSourceDataAcknowledged(safe.sourceDataAcknowledged());
         session.setUpdatedAt(Instant.now());
-        return toResponse(repository.save(session));
+        return toResponse(repository.saveAndFlush(session));
     }
 
     @Transactional
     public SelectionSessionResponse finalize(Long batchId, Long farmId, Long sessionId) {
+        return finalize(batchId, farmId, sessionId, null);
+    }
+
+    @Transactional
+    public SelectionSessionResponse finalize(Long batchId, Long farmId, Long sessionId, Long expectedVersion) {
         Batch batch = batchService.requireBatch(batchId, farmId);
         batchService.ensureWritable(batch);
         BatchSelectionSession session = find(batchId, farmId, sessionId);
         if (session.getStatus() == SelectionSessionStatus.FINALIZED) {
             return toResponse(session);
+        }
+        if (expectedVersion != null && expectedVersion != session.getVersion()) {
+            throw new com.poultryprophet.common.ConflictException("This selection draft changed. Review the current version before finalizing.");
         }
         if (session.getStatus() != SelectionSessionStatus.DRAFT) {
             throw new BadRequestException("This selection session cannot be finalized");
@@ -150,12 +204,30 @@ public class SelectionSessionService {
         CreateSelectionSessionRequest request = new CreateSelectionSessionRequest(
                 session.getSelectionDate(), session.getEvaluatedCount(), session.getAcceptedCount(),
                 session.getContinueObservationCount(), session.getNotAcceptedCount(), session.getOtherCount(),
-                session.getCriterionCodes(), session.getCriteriaNotes(), session.getSessionNotes(), session.getOperationId());
+                session.getCriterionCodes(), session.getCriteriaNotes(), session.getSessionNotes(), session.getOperationId(),
+                session.getSelectionReviewId(), session.isSourceDataAcknowledged());
         validateCounts(batch, request, true, session.getSelectionDate());
+        if (session.getSelectionReviewId() != null) {
+            requireLinkedReview(batchId, farmId, session.getSelectionReviewId(), session.getSelectionDate(),
+                    session.isSourceDataAcknowledged(), true);
+        }
+        if (session.getSupersedesSessionId() != null) {
+            BatchSelectionSession previous = find(batchId, farmId, session.getSupersedesSessionId());
+            if (previous.getStatus() != SelectionSessionStatus.FINALIZED) {
+                throw new com.poultryprophet.common.ConflictException("The previous selection outcome has already been replaced. Review the latest history.");
+            }
+            previous.setStatus(SelectionSessionStatus.SUPERSEDED);
+            previous.setUpdatedAt(Instant.now());
+            repository.save(previous);
+        }
         session.setStatus(SelectionSessionStatus.FINALIZED);
-        session.setFinalizedAt(Instant.now());
+        // Match PostgreSQL precision before the first acknowledgement so a
+        // terminal replay returns the same stored timestamp.
+        session.setFinalizedAt(Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS));
         session.setUpdatedAt(session.getFinalizedAt());
-        return toResponse(repository.save(session));
+        BatchSelectionSession saved = repository.save(session);
+        repository.flush();
+        return toResponse(saved);
     }
 
     @Transactional
@@ -164,6 +236,9 @@ public class SelectionSessionService {
         BatchSelectionSession old = find(batchId, farmId, oldSessionId);
         if (old.getStatus() != SelectionSessionStatus.FINALIZED) {
             throw new BadRequestException("Only a finalized session can be superseded");
+        }
+        if (old.getSelectionReviewId() != null && !Objects.equals(old.getSelectionReviewId(), request.selectionReviewId())) {
+            throw new BadRequestException("A corrected outcome must remain linked to the same report");
         }
         return create(batchId, farmId, reviewerId, request, oldSessionId);
     }
@@ -248,7 +323,44 @@ public class SelectionSessionService {
                 && Objects.equals(existing.getCriterionCodes(), normalizeCriteria(request.criterionCodes()))
                 && Objects.equals(existing.getCriteriaNotes(), clean(request.criteriaNotes()))
                 && Objects.equals(existing.getSessionNotes(), clean(request.sessionNotes()))
+                && Objects.equals(existing.getSelectionReviewId(), request.selectionReviewId())
+                && existing.isSourceDataAcknowledged() == request.sourceDataAcknowledged()
                 && Objects.equals(existing.getSupersedesSessionId(), supersedesSessionId);
+    }
+
+    private void requireLinkedReview(Long batchId, Long farmId, Long reviewId, LocalDate selectionDate,
+                                     boolean sourceDataAcknowledged, boolean finalizing) {
+        // The compatibility constructor is used only by older focused tests. Runtime wiring always provides the repository.
+        if (reviewRepository == null) return;
+        if (reviewId == null) {
+            throw new BadRequestException("Finalize a batch review report before recording a selection outcome");
+        }
+        BatchSelectionReview review = reviewRepository.findByIdAndFarmIdAndBatchId(reviewId, farmId, batchId)
+                .orElseThrow(() -> new NotFoundException("Selection review " + reviewId + " not found"));
+        if (review.getStatus() != SelectionReviewStatus.FINALIZED) {
+            throw new BadRequestException("Finalize the batch review report before recording a selection outcome");
+        }
+        if (review.getReviewStatus() != ManagerReviewStatus.FOR_IN_PERSON_ASSESSMENT) {
+            throw new BadRequestException("This report does not authorize an in-person selection outcome");
+        }
+        if (selectionDate.isBefore(review.getAsOfDate())) {
+            throw new BadRequestException("Selection date cannot be before the report's as-of date");
+        }
+        if (finalizing && hasNewerSourceData(review) && !sourceDataAcknowledged) {
+            throw new BadRequestException("Newer batch records are available. Review them or acknowledge the report snapshot before finalizing.");
+        }
+    }
+
+    private boolean hasNewerSourceData(BatchSelectionReview review) {
+        Instant cutoff = review.getSourceCutoffAt() == null ? review.getGeneratedAt() : review.getSourceCutoffAt();
+        if (cutoff == null) return false;
+        return eventRepository.existsByBatchIdAndCreatedAtAfter(review.getBatchId(), cutoff)
+                || (inputRepository != null && inputRepository.existsByFarmIdAndBatchIdAndCreatedAtAfter(
+                review.getFarmId(), review.getBatchId(), cutoff))
+                || (financeRepository != null && financeRepository.existsByFarmIdAndBatchIdAndCreatedAtAfter(
+                review.getFarmId(), review.getBatchId(), cutoff))
+                || (sexCompositionRepository != null && sexCompositionRepository.existsByBatchIdAndFarmIdAndCreatedAtAfter(
+                review.getBatchId(), review.getFarmId(), cutoff));
     }
 
     private Set<String> normalizeCriteria(Set<String> values) {
@@ -274,7 +386,8 @@ public class SelectionSessionService {
                 session.getOtherCount(), rate, session.getAcceptedCount(), session.getEvaluatedCount(),
                 session.getStatus(), Set.copyOf(session.getCriterionCodes()), session.getCriteriaNotes(),
                 session.getSessionNotes(), session.getOperationId() == null ? null : session.getOperationId().toString(),
-                session.getSupersedesSessionId(), session.getCreatedAt(), session.getUpdatedAt(), session.getFinalizedAt());
+                session.getSupersedesSessionId(), session.getCreatedAt(), session.getUpdatedAt(), session.getFinalizedAt(),
+                session.getSelectionReviewId(), session.isSourceDataAcknowledged(), session.getVersion());
     }
 
     private LocalDate today() {

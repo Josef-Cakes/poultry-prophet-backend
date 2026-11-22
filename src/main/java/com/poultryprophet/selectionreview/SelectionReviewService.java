@@ -8,6 +8,7 @@ import com.lowagie.text.Paragraph;
 import com.lowagie.text.pdf.PdfWriter;
 import com.poultryprophet.batch.Batch;
 import com.poultryprophet.batch.BatchService;
+import com.poultryprophet.batch.BatchAgePolicy;
 import com.poultryprophet.common.BadRequestException;
 import com.poultryprophet.common.NotFoundException;
 import com.poultryprophet.event.BatchEvent;
@@ -33,6 +34,7 @@ import com.poultryprophet.sexcomposition.BatchSexComposition;
 import com.poultryprophet.sexcomposition.BatchSexCompositionRepository;
 import com.poultryprophet.sexcomposition.SexCompositionProjection;
 import com.poultryprophet.sexcomposition.SexCompositionProjectionService;
+import com.poultryprophet.task.TaskService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -44,7 +46,6 @@ import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -71,6 +72,7 @@ public class SelectionReviewService {
     private final BatchSexCompositionRepository sexCompositionRepository;
     private final SexCompositionProjectionService sexCompositionProjectionService;
     private final InventoryMovementRepository inventoryMovementRepository;
+    private final TaskService taskService;
 
     @Value("${app.time-zone:Asia/Manila}")
     private String timeZone;
@@ -87,7 +89,8 @@ public class SelectionReviewService {
                                   PopulationProjectionService populationProjectionService,
                                   BatchSexCompositionRepository sexCompositionRepository,
                                   SexCompositionProjectionService sexCompositionProjectionService,
-                                  InventoryMovementRepository inventoryMovementRepository) {
+                                  InventoryMovementRepository inventoryMovementRepository,
+                                  TaskService taskService) {
         this.reviewRepository = reviewRepository;
         this.eventRepository = eventRepository;
         this.inputRepository = inputRepository;
@@ -100,6 +103,17 @@ public class SelectionReviewService {
         this.sexCompositionRepository = sexCompositionRepository;
         this.sexCompositionProjectionService = sexCompositionProjectionService;
         this.inventoryMovementRepository = inventoryMovementRepository;
+        this.taskService = taskService;
+    }
+
+    /** Compatibility constructor for callers that do not schedule follow-ups. */
+    public SelectionReviewService(BatchSelectionReviewRepository reviews, BatchEventRepository events,
+                                  FarmInputLogRepository inputs, IncubationCycleRepository incubation,
+                                  FinancialTransactionRepository finance, BatchService batches, ObjectMapper mapper,
+                                  SelectionSessionService sessions, PopulationProjectionService population,
+                                  BatchSexCompositionRepository sex, SexCompositionProjectionService sexProjection,
+                                  InventoryMovementRepository inventory) {
+        this(reviews, events, inputs, incubation, finance, batches, mapper, sessions, population, sex, sexProjection, inventory, null);
     }
 
     /** Compatibility constructor retained for focused tests and older integrations. */
@@ -136,7 +150,8 @@ public class SelectionReviewService {
                                           boolean includeFinance) {
         Batch batch = batchService.requireBatch(batchId, farmId);
         Dates dates = normalizeDates(batch, periodStart, periodEnd, asOfDate);
-        return aggregate(batch, farmId, dates.periodStart(), dates.periodEnd(), dates.asOfDate(), includeFinance);
+        SelectionReviewPayload payload = aggregate(batch, farmId, dates.periodStart(), dates.periodEnd(), dates.asOfDate(), includeFinance);
+        return includeFinance ? payload : withoutFinance(payload);
     }
 
     @Transactional
@@ -197,12 +212,28 @@ public class SelectionReviewService {
     @Transactional
     public SelectionReviewResponse finalize(Long batchId, Long farmId, Long reviewId, Long userId,
                                             FinalizeSelectionReviewRequest request) {
-        Batch batch = batchService.requireBatch(batchId, farmId);
+        Batch batch = batchService.requireBatchForUpdate(batchId, farmId);
         batchService.ensureWritable(batch);
         BatchSelectionReview review = reviewRepository.findByIdAndFarmIdAndBatchId(reviewId, farmId, batchId)
                 .orElseThrow(() -> new NotFoundException("Selection review " + reviewId + " not found"));
         if (review.getStatus() == SelectionReviewStatus.FINALIZED) {
             throw new BadRequestException("A finalized selection review is immutable; create a new review for corrected source data");
+        }
+        if (request == null || request.reviewStatus() == null || request.reviewStatus() == ManagerReviewStatus.NOT_REVIEWED) {
+            throw new BadRequestException("Choose a review decision before finalizing the report");
+        }
+        if (request.reviewStatus() == ManagerReviewStatus.CONTINUE_OBSERVATION && request.nextReviewDate() == null) {
+            throw new BadRequestException("Set the next review date when continuing observation");
+        }
+        if (request.nextReviewDate() != null && request.nextReviewDate().isBefore(review.getAsOfDate())) {
+            throw new BadRequestException("The next review date cannot be before the report's as-of date");
+        }
+        if (request.nextReviewDate() != null && request.nextReviewDate().isBefore(LocalDate.now(farmZone()))) {
+            throw new BadRequestException("The next review date must be today or later");
+        }
+
+        if (request.nextReviewDate() != null && taskService != null) {
+            taskService.scheduleReviewFollowUp(farmId, batchId, userId, reviewId, request.nextReviewDate(), farmZone());
         }
 
         String notes = request.managerNotes() == null ? null : request.managerNotes().trim();
@@ -241,11 +272,12 @@ public class SelectionReviewService {
                 .findByFarmIdAndBatchIdAndRecordedAtGreaterThanEqualAndRecordedAtLessThanOrderByRecordedAtDesc(
                         farmId, batch.getId(), periodStart.atStartOfDay(farmZone()).toInstant(),
                         periodEnd.plusDays(1).atStartOfDay(farmZone()).toInstant());
-        Map<Long, InventoryMovement> productMovements = inventoryMovementRepository == null ? Map.of()
+        List<InventoryMovement> movements = inventoryMovementRepository == null ? List.of()
                 : inventoryMovementRepository.findByFarmIdAndBatchIdAndOccurredAtBetweenOrderByOccurredAtAsc(
                         farmId, batch.getId(), periodStart.atStartOfDay(farmZone()).toInstant(),
-                        periodEnd.plusDays(1).atStartOfDay(farmZone()).toInstant()).stream()
-                .filter(value -> value.getFarmInputLogId() != null)
+                        periodEnd.plusDays(1).atStartOfDay(farmZone()).toInstant());
+        Map<Long, InventoryMovement> productMovements = movements.stream()
+                .filter(value -> value.getMovementType() == InventoryMovementType.USAGE && value.getFarmInputLogId() != null)
                 .collect(java.util.stream.Collectors.toMap(InventoryMovement::getFarmInputLogId, value -> value, (first, ignored) -> first));
 
         // Keep the shared service accessor here so existing report tests and callers retain the
@@ -284,7 +316,7 @@ public class SelectionReviewService {
                 .orElse(null);
 
         SelectionReviewPayload.FinanceSummary finance = includeFinance
-                ? financeSummary(farmId, batch.getId(), periodStart, periodEnd)
+                ? financeSummary(farmId, batch.getId(), periodStart, periodEnd, products, movements)
                 : null;
 
         List<SelectionReviewPayload.DataAvailabilityItem> availability = new ArrayList<>();
@@ -346,7 +378,7 @@ public class SelectionReviewService {
         SelectionReviewPayload.BatchOverview overview = new SelectionReviewPayload.BatchOverview(
                 batch.getId(), batch.getName(), batch.getBloodline(), batch.getSource(), batch.getInitialPopulation(),
                 population.currentPopulation(), population.currentPopulation() + " / " + batch.getInitialPopulation(),
-                Math.max(1, ChronoUnit.DAYS.between(batch.getHatchDate(), asOfDate) + 1), stage.stage().getName(),
+                BatchAgePolicy.ageDays(batch.getHatchDate(), asOfDate), stage.stage().getName(),
                 batch.getHatchDate(), latestEventDate);
 
         return new SelectionReviewPayload(
@@ -429,18 +461,16 @@ public class SelectionReviewService {
         PopulationProjection projection = populationProjectionService.project(batch, events, asOfDate, farmZone());
         boolean currentAsOfDate = asOfDate.equals(LocalDate.now(farmZone()));
         long preferredPopulation = currentAsOfDate && batch.getCurrentPopulation() >= 0
-                && batch.getCurrentPopulation() <= batch.getInitialPopulation()
                 ? batch.getCurrentPopulation()
                 : projection.validPopulation() == null ? projection.boundedPopulation() : projection.validPopulation();
-        int boundedPopulation = (int) Math.max(0L,
-                Math.min((long) Math.max(0, batch.getInitialPopulation()), preferredPopulation));
+        int boundedPopulation = (int) Math.max(0L, Math.min(Integer.MAX_VALUE, preferredPopulation));
         boolean reconciliationRequired = projection.reconciliationRequired();
         String reconciliationMessage = projection.reconciliationMessage();
 
         long healthDeaths = categories.get("healthRelatedDeaths");
         long accidentalDeaths = categories.get("accidentalDeaths");
         long totalDeaths = healthDeaths + accidentalDeaths;
-        Double rate = batch.getInitialPopulation() == 0 || healthDeaths > batch.getInitialPopulation() ? null
+        Double rate = reconciliationRequired || batch.getInitialPopulation() == 0 || healthDeaths > batch.getInitialPopulation() ? null
                 : round(healthDeaths * 100.0 / batch.getInitialPopulation(), 2);
         return new SelectionReviewPayload.PopulationSummary(
                 batch.getInitialPopulation(), boundedPopulation, projection.calculatedPopulation(),
@@ -465,24 +495,33 @@ public class SelectionReviewService {
     }
 
     private SelectionReviewPayload.FinanceSummary financeSummary(Long farmId, Long batchId,
-                                                                  LocalDate start, LocalDate end) {
+                                                                  LocalDate start, LocalDate end,
+                                                                  List<FarmInputLog> products,
+                                                                  List<InventoryMovement> movements) {
         List<FinancialTransaction> transactions = financeRepository
                 .findByFarmIdAndBatchIdAndTransactionDateBetweenOrderByTransactionDateAsc(farmId, batchId, start, end);
         List<FinancialTransaction> posted = transactions.stream()
                 .filter(value -> value.getStatus() == FinanceTransactionStatus.POSTED).toList();
         BigDecimal productsConsumed = BigDecimal.ZERO;
-        boolean complete = true;
-        boolean hasProductUsage = false;
-        if (inventoryMovementRepository != null) {
-            List<InventoryMovement> movements = inventoryMovementRepository.findByFarmIdAndBatchIdAndOccurredAtBetweenOrderByOccurredAtAsc(
-                    farmId, batchId, start.atStartOfDay(farmZone()).toInstant(), end.plusDays(1).atStartOfDay(farmZone()).toInstant());
-            for (InventoryMovement movement : movements) {
-                if (movement.getMovementType() != InventoryMovementType.USAGE) continue;
-                hasProductUsage = true;
-                if (movement.getInventoryValueDelta() == null) complete = false;
-                else productsConsumed = productsConsumed.add(movement.getInventoryValueDelta().abs());
+        long unvaluedUsageCount = 0;
+        boolean hasProductUsage = !products.isEmpty();
+        Map<Long, InventoryMovement> usageByInput = new java.util.HashMap<>();
+        for (InventoryMovement movement : movements) {
+            if (movement.getMovementType() != InventoryMovementType.USAGE) continue;
+            hasProductUsage = true;
+            if (movement.getFarmInputLogId() != null) usageByInput.put(movement.getFarmInputLogId(), movement);
+            if (movement.getInventoryValueDelta() == null) unvaluedUsageCount++;
+            else productsConsumed = productsConsumed.add(movement.getInventoryValueDelta().abs());
+        }
+        for (FarmInputLog product : products) {
+            InventoryMovement movement = product.getId() == null ? null : usageByInput.get(product.getId());
+            // A missing movement or quantity means the known subtotal cannot represent all use.
+            // An unvalued movement was already counted above, even when its quantity is missing.
+            if (movement == null || (product.getQuantity() == null && movement.getInventoryValueDelta() != null)) {
+                unvaluedUsageCount++;
             }
         }
+        boolean complete = unvaluedUsageCount == 0;
         Map<String, List<FinancialTransaction>> groups = new java.util.TreeMap<>();
         for (FinancialTransaction tx : posted) {
             String currency = tx.getCurrency() == null || tx.getCurrency().isBlank()
@@ -518,6 +557,7 @@ public class SelectionReviewService {
                 legacy == null ? null : legacy.recordedExpense(), legacy == null ? null : legacy.recordedNetCashFlow(),
                 legacy == null ? null : legacy.productsConsumedCost(), legacy == null ? null : legacy.totalRecordedBatchCost(),
                 legacy == null ? null : legacy.recordedContribution(), posted.size(), !complete,
+                unvaluedUsageCount,
                 "Currencies are shown separately without conversion. Inventory usage costs use the legacy PHP convention; records may be incomplete.", totals);
     }
 
@@ -544,25 +584,14 @@ public class SelectionReviewService {
 
     private SelectionReviewResponse toResponse(BatchSelectionReview review, boolean includeFinance) {
         SelectionReviewPayload payload = readPayload(review.getPayloadJson());
-        if (!includeFinance && payload.finance() != null) {
-            List<SelectionReviewPayload.DataAvailabilityItem> publicAvailability = payload.dataAvailability().stream()
-                    .filter(item -> !"Batch finance".equals(item.section())).toList();
-            payload = new SelectionReviewPayload(payload.reportTitle(), payload.disclaimer(), payload.payloadVersion(),
-                    payload.periodStart(), payload.periodEnd(), payload.asOfDate(), payload.batch(), payload.population(),
-                    payload.healthEvents(), payload.productUse(), payload.incubation(), null, publicAvailability,
-                    payload.selectionSummary(),
-                    payload.sexComposition(),
-                    payload.reviewInstructions());
-        }
+        if (!includeFinance) payload = withoutFinance(payload);
         Instant sourceCutoff = review.getSourceCutoffAt() == null ? review.getGeneratedAt() : review.getSourceCutoffAt();
         boolean newerDataAvailable = sourceCutoff != null && (
                 eventRepository.existsByBatchIdAndCreatedAtAfter(review.getBatchId(), sourceCutoff)
                         || inputRepository.existsByFarmIdAndBatchIdAndCreatedAtAfter(review.getFarmId(), review.getBatchId(), sourceCutoff)
                         || financeRepository.existsByFarmIdAndBatchIdAndCreatedAtAfter(review.getFarmId(), review.getBatchId(), sourceCutoff)
                         || (sexCompositionRepository != null
-                        && sexCompositionRepository.existsByBatchIdAndFarmIdAndCreatedAtAfter(review.getBatchId(), review.getFarmId(), sourceCutoff))
-                        || (selectionSessionService != null
-                        && selectionSessionService.hasChangedAfter(review.getBatchId(), review.getFarmId(), sourceCutoff)));
+                        && sexCompositionRepository.existsByBatchIdAndFarmIdAndCreatedAtAfter(review.getBatchId(), review.getFarmId(), sourceCutoff)));
         return new SelectionReviewResponse(review.getId(), review.getFarmId(), review.getBatchId(),
                 payload.batch().batchName(), review.getPeriodStart(), review.getPeriodEnd(), review.getAsOfDate(),
                 review.getStatus(), review.getReviewStatus(), review.getManagerNotes(), review.getNextReviewDate(),
@@ -570,6 +599,21 @@ public class SelectionReviewService {
                 review.getPayloadVersion(), payload, review.getGeneratedBy(), review.getGeneratedAt(), sourceCutoff,
                 newerDataAvailable,
                 review.getReviewedBy(), review.getReviewedAt());
+    }
+
+    /** Remove financial fields from both current and historical payloads without modifying snapshots. */
+    private SelectionReviewPayload withoutFinance(SelectionReviewPayload payload) {
+        List<SelectionReviewPayload.DataAvailabilityItem> publicAvailability = payload.dataAvailability() == null
+                ? List.of() : payload.dataAvailability().stream()
+                .filter(item -> !"Batch finance".equals(item.section())).toList();
+        List<SelectionReviewPayload.ProductUseItem> products = payload.productUse() == null ? List.of()
+                : payload.productUse().stream().map(item -> new SelectionReviewPayload.ProductUseItem(
+                item.sourceId(), item.recordedAt(), item.productType(), item.brandName(), item.productName(),
+                item.quantity(), item.unit(), null, null, null, item.purpose(), item.notes(), item.recordedBy())).toList();
+        return new SelectionReviewPayload(payload.reportTitle(), payload.disclaimer(), payload.payloadVersion(),
+                payload.periodStart(), payload.periodEnd(), payload.asOfDate(), payload.batch(), payload.population(),
+                payload.healthEvents(), products, payload.incubation(), null, publicAvailability,
+                payload.selectionSummary(), payload.sexComposition(), payload.reviewInstructions());
     }
 
     private SelectionReviewPayload withReviewInstructions(SelectionReviewPayload payload,
@@ -604,10 +648,9 @@ public class SelectionReviewService {
         if (payload == null || payload.population() == null || payload.batch() == null) return payload;
         SelectionReviewPayload.PopulationSummary population = payload.population();
         SelectionReviewPayload.BatchOverview batch = payload.batch();
-        boolean currentOutsideBounds = population.currentPopulation() < 0
-                || population.currentPopulation() > population.initialPopulation();
-        boolean batchOutsideBounds = batch.currentPopulation() < 0
-                || batch.currentPopulation() > batch.initialPopulation();
+        long allowedMaximum = Math.max(0L, population.initialPopulation()) + Math.max(0L, population.transfersIn());
+        boolean currentOutsideBounds = population.currentPopulation() < 0 || population.currentPopulation() > allowedMaximum;
+        boolean batchOutsideBounds = batch.currentPopulation() < 0 || batch.currentPopulation() > allowedMaximum;
         boolean legacyPayload = !PAYLOAD_VERSION.equals(payload.payloadVersion());
         boolean reconciliationRequired = population.reconciliationRequired()
                 || currentOutsideBounds || batchOutsideBounds;
@@ -629,8 +672,7 @@ public class SelectionReviewService {
         }
         if (!reconciliationRequired) return payload;
 
-        int boundedPopulation = (int) Math.max(0L,
-                Math.min((long) population.initialPopulation(), population.currentPopulation()));
+        int boundedPopulation = (int) Math.max(0L, Math.min(Math.min(Integer.MAX_VALUE, allowedMaximum), population.currentPopulation()));
         long calculatedPopulation = legacyPayload
                 ? population.currentPopulation()
                 : population.calculatedPopulationFromEvents();

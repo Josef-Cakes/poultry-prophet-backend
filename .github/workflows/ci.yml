@@ -33,3 +33,8 @@ jobs:
       - run: ./mvnw --batch-mode test
         env:
           POULTRY_DISPOSABLE_DB_URL: jdbc:postgresql://127.0.0.1:25432/poultry_prophet_validation
+
+      - name: Audit resolved backend runtime dependencies
+        run: |
+          ./mvnw --batch-mode dependency:list -DincludeScope=runtime -DoutputFile=target/runtime-dependencies.txt
+          python3 scripts/audit-runtime-dependencies.py target/runtime-dependencies.txt --report target/runtime-dependency-audit.json

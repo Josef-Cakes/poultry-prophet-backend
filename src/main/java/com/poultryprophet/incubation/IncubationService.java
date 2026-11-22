@@ -8,6 +8,7 @@ import com.poultryprophet.common.NotFoundException;
 import com.poultryprophet.incubation.dto.CompleteIncubationRequest;
 import com.poultryprophet.incubation.dto.CreateIncubationCycleRequest;
 import com.poultryprophet.incubation.dto.IncubationCycleResponse;
+import com.poultryprophet.incubation.dto.IncubationAttentionResponse;
 import com.poultryprophet.incubation.dto.UpdateIncubationCycleRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -61,6 +62,26 @@ public class IncubationService {
         requireFarm(farmId);
         return repository.findByFarmIdOrderByLoadedDateDescCreatedAtDesc(farmId).stream()
                 .map(IncubationCycleResponse::from).toList();
+    }
+
+    /** Derive current reminders so recording a result or linking a batch resolves them immediately. */
+    @Transactional(readOnly = true)
+    public List<IncubationAttentionResponse> attention(Long farmId) {
+        requireFarm(farmId);
+        LocalDate asOf = today();
+        return repository.findByFarmIdOrderByLoadedDateDescCreatedAtDesc(farmId).stream()
+                .map(cycle -> {
+                    String kind = null;
+                    if (cycle.getStatus() == IncubationStatus.COMPLETED) {
+                        if (cycle.getCreatedBatchId() == null && cycle.getHatchedCount() != null && cycle.getHatchedCount() > 0) kind = "BATCH_NEEDED";
+                    } else if (cycle.getStatus() != IncubationStatus.CANCELLED && cycle.getExpectedHatchDate() != null) {
+                        int comparison = cycle.getExpectedHatchDate().compareTo(asOf);
+                        if (comparison == 0) kind = "HATCH_DUE_TODAY";
+                        else if (comparison < 0) kind = "HATCH_OVERDUE";
+                    }
+                    return kind == null ? null : new IncubationAttentionResponse(cycle.getId(), cycle.getCycleName(),
+                            cycle.getExpectedHatchDate(), cycle.getActualHatchDate(), cycle.getHatchedCount(), kind, asOf);
+                }).filter(java.util.Objects::nonNull).toList();
     }
 
     @Transactional(readOnly = true)
@@ -147,8 +168,10 @@ public class IncubationService {
     }
 
     @Transactional
-    public BatchResponse createBatch(Long id, Long farmId, LocalDate farmEntryDate) {
-        IncubationCycle cycle = require(id, farmId);
+    public BatchResponse createBatch(Long id, Long farmId, LocalDate farmEntryDate,
+                                     String bloodline, LocalDate derbyDate) {
+        IncubationCycle cycle = repository.findForUpdate(id, farmId)
+                .orElseThrow(() -> new NotFoundException("Incubation cycle " + id + " not found"));
         if (cycle.getStatus() != IncubationStatus.COMPLETED || cycle.getHatchedCount() == null
                 || cycle.getActualHatchDate() == null) {
             throw new BadRequestException("Complete the incubation cycle before creating a batch");
@@ -156,6 +179,7 @@ public class IncubationService {
         if (cycle.getCreatedBatchId() != null) {
             return batchService.getForFarm(cycle.getCreatedBatchId(), farmId);
         }
+        if (cycle.getHatchedCount() <= 0) throw new BadRequestException("No chicks were recorded as hatched");
         if (farmEntryDate == null || farmEntryDate.isBefore(cycle.getActualHatchDate())) {
             throw new BadRequestException("Farm entry date cannot be before the actual hatch date");
         }
@@ -164,8 +188,9 @@ public class IncubationService {
         }
         String batchName = cycle.getCycleName() + " Hatch";
         CreateBatchRequest request = new CreateBatchRequest(batchName, cycle.getHatchedCount(),
-                farmEntryDate, null, cycle.getBloodline(), "INCUBATION:" + cycle.getCycleName(), List.of(),
-                cycle.getActualHatchDate(), farmEntryDate);
+                farmEntryDate, null, bloodline != null ? bloodline : cycle.getBloodline(),
+                "INCUBATION:" + cycle.getCycleName(), List.of(),
+                cycle.getActualHatchDate(), farmEntryDate, derbyDate);
         BatchResponse batch = batchService.create(request, farmId);
         cycle.setCreatedBatchId(batch.id());
         repository.save(cycle);

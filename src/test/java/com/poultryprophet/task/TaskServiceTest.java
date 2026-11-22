@@ -94,6 +94,65 @@ class TaskServiceTest {
     }
 
     @Test
+    void allowsManagerToCompleteAReviewFollowUp() {
+        HandlerTask task = new HandlerTask();
+        task.setId(7L); task.setFarmId(1L); task.setAssignmentScope("BATCH_TEAM");
+        task.setSourceType("SELECTION_REVIEW_FOLLOWUP"); task.setStatus(TaskStatus.TODO);
+        when(taskRepository.findByIdAndFarmIdForUpdate(7L, 1L)).thenReturn(Optional.of(task));
+        when(taskRepository.save(any(HandlerTask.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        TaskResponse result = service.updateStatus(7L, 1L, 10L, true,
+                new UpdateTaskStatusRequest(TaskStatus.COMPLETED, null));
+        assertEquals("COMPLETED", result.status());
+        assertEquals(10L, result.completedBy());
+    }
+
+    @Test
+    void allowsHandlerToCompleteATeamReviewFollowUp() {
+        HandlerTask task = new HandlerTask();
+        task.setId(7L); task.setFarmId(1L); task.setAssignmentScope("BATCH_TEAM");
+        task.setSourceType("SELECTION_REVIEW_FOLLOWUP"); task.setStatus(TaskStatus.TODO);
+        when(taskRepository.findByIdAndFarmIdForUpdate(7L, 1L)).thenReturn(Optional.of(task));
+        when(taskRepository.save(any(HandlerTask.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        TaskResponse result = service.updateStatus(7L, 1L, 22L, false,
+                new UpdateTaskStatusRequest(TaskStatus.COMPLETED, null));
+        assertEquals("COMPLETED", result.status());
+        assertEquals(22L, result.completedBy());
+    }
+
+    @Test
+    void reschedulesTheExistingOpenFollowUpInsteadOfCreatingAnother() {
+        HandlerTask task = new HandlerTask();
+        task.setId(7L); task.setFarmId(1L); task.setBatchId(22L);
+        task.setSourceType("SELECTION_REVIEW_FOLLOWUP"); task.setStatus(TaskStatus.TODO);
+        task.setDueAt(Instant.parse("2026-10-24T15:59:59Z"));
+        when(taskRepository.findFirstByFarmIdAndBatchIdAndSourceTypeAndStatusInOrderByIdAsc(
+                org.mockito.ArgumentMatchers.eq(1L), org.mockito.ArgumentMatchers.eq(22L),
+                org.mockito.ArgumentMatchers.eq("SELECTION_REVIEW_FOLLOWUP"), any())).thenReturn(Optional.of(task));
+        when(taskRepository.findByIdAndFarmIdForUpdate(7L, 1L)).thenReturn(Optional.of(task));
+        when(taskRepository.save(any(HandlerTask.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        service.scheduleReviewFollowUp(1L, 22L, 10L, 44L, java.time.LocalDate.of(2026, 10, 30), ZoneId.of("Asia/Manila"));
+        assertEquals(Instant.parse("2026-10-30T15:59:59Z"), task.getDueAt());
+        assertEquals(44L, task.getSourceId());
+        verify(taskRepository).save(task);
+        verify(historyRepository).save(any());
+    }
+
+    @Test
+    void createsATeamFollowUpWhenNoneIsOpen() {
+        when(taskRepository.save(any(HandlerTask.class))).thenAnswer(invocation -> {
+            HandlerTask saved = invocation.getArgument(0); saved.setId(77L); return saved;
+        });
+        service.scheduleReviewFollowUp(1L, 22L, 10L, 44L, java.time.LocalDate.of(2026, 10, 30), ZoneId.of("Asia/Manila"));
+        ArgumentCaptor<HandlerTask> capture = ArgumentCaptor.forClass(HandlerTask.class);
+        verify(taskRepository).save(capture.capture());
+        assertEquals("BATCH_TEAM", capture.getValue().getAssignmentScope());
+        assertEquals("SELECTION_REVIEW_FOLLOWUP", capture.getValue().getSourceType());
+        assertEquals(44L, capture.getValue().getSourceId());
+        assertEquals(Instant.parse("2026-10-30T15:59:59Z"), capture.getValue().getDueAt());
+        verify(historyRepository).save(any());
+    }
+
+    @Test
     void handlerCannotCancelOrReopenTerminalTask() {
         HandlerTask task = new HandlerTask();
         task.setId(7L);

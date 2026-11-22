@@ -20,15 +20,21 @@ import java.util.List;
 public class SelectionSessionController {
     private final SelectionSessionService service;
 
-    public SelectionSessionController(SelectionSessionService service) {
+    private final SelectionSessionCommandService commands;
+    private final com.poultryprophet.sync.RemainingCommandService creations;
+
+    public SelectionSessionController(SelectionSessionService service, SelectionSessionCommandService commands, com.poultryprophet.sync.RemainingCommandService creations) {
         this.service = service;
+        this.commands = commands;
+        this.creations = creations;
     }
 
     @PostMapping
     public SelectionSessionResponse create(@PathVariable Long batchId,
                                            @Valid @RequestBody CreateSelectionSessionRequest request,
                                            @AuthenticationPrincipal CustomUserDetails principal) {
-        return service.create(batchId, principal.getFarmId(), principal.getId(), request, null);
+        return request.operationId() == null ? service.create(batchId, principal.getFarmId(), principal.getId(), request, null)
+                : creations.selection(batchId, principal.getFarmId(), principal.getId(), request, null).response();
     }
 
     @GetMapping
@@ -47,19 +53,21 @@ public class SelectionSessionController {
     public SelectionSessionResponse update(@PathVariable Long batchId, @PathVariable Long sessionId,
                                            @Valid @RequestBody CreateSelectionSessionRequest request,
                                            @AuthenticationPrincipal CustomUserDetails principal) {
-        return service.updateDraft(batchId, principal.getFarmId(), sessionId, request);
+        return commands.update(batchId, principal.getFarmId(), principal.getId(), sessionId, request).outcome();
     }
 
     @PostMapping("/{sessionId}/finalize")
     public SelectionSessionResponse finalize(@PathVariable Long batchId, @PathVariable Long sessionId,
+                                             @Valid @RequestBody(required = false) FinalizeSelectionSessionRequest request,
                                              @AuthenticationPrincipal CustomUserDetails principal) {
-        return service.finalize(batchId, principal.getFarmId(), sessionId);
+        return service.finalize(batchId, principal.getFarmId(), sessionId, request == null ? null : request.expectedVersion());
     }
 
     @PostMapping("/{sessionId}/supersede")
     public SelectionSessionResponse supersede(@PathVariable Long batchId, @PathVariable Long sessionId,
                                               @Valid @RequestBody CreateSelectionSessionRequest request,
                                               @AuthenticationPrincipal CustomUserDetails principal) {
-        return service.supersede(batchId, principal.getFarmId(), sessionId, principal.getId(), request);
+        return request.operationId() == null ? service.supersede(batchId, principal.getFarmId(), sessionId, principal.getId(), request)
+                : creations.selection(batchId, principal.getFarmId(), principal.getId(), request, sessionId).response();
     }
 }

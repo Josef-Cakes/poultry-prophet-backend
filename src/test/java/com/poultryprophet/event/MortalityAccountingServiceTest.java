@@ -4,12 +4,16 @@ import com.poultryprophet.batch.Batch;
 import com.poultryprophet.batch.BatchRepository;
 import com.poultryprophet.batch.BatchService;
 import com.poultryprophet.common.BadRequestException;
+import com.poultryprophet.common.ConflictException;
 import com.poultryprophet.common.DateValidationService;
 import com.poultryprophet.event.dto.CreateBatchEventRequest;
 import com.poultryprophet.population.PopulationProjectionService;
 import com.poultryprophet.record.DailyRecordRepository;
 import com.poultryprophet.sexcomposition.SexCompositionProjectionService;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -22,6 +26,7 @@ import java.util.List;
 import java.time.ZoneId;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -62,6 +67,145 @@ class MortalityAccountingServiceTest {
     private MortalityAccountingService service;
 
     @Test
+    void rejectsBlankSignsEvenWhenAdditionalNotesFollowWithoutChangingPopulation() {
+        LocalDate date = LocalDate.now(ZoneId.of("Asia/Manila")).minusDays(1);
+        when(dateValidation.resolve(date)).thenReturn(date);
+        Batch batch = batch(55);
+        when(batchService.requireBatchForUpdate(10L, 7L)).thenReturn(batch);
+
+        assertThatThrownBy(() -> service.record(10L, 7L, 21L,
+                new CreateBatchEventRequest(date, EventType.HEALTH_DEATH,
+                        "Health-related death", null, 1, "Signs noticed:  \nAdditional notes", null)))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("signs");
+
+        assertThat(batch.getCurrentPopulation()).isEqualTo(55);
+        verify(eventRepository, never()).save(any());
+        verifyNoInteractions(batchRepository, publisher);
+    }
+
+    static Stream<Arguments> validHealthObservations() {
+        return Stream.of(
+                Arguments.of("SIGNS", "trouble breathing", "Signs noticed: trouble breathing"),
+                Arguments.of("SIGNS", "coughing\nnot eating", "Signs noticed: coughing\nnot eating\nAdditional note"),
+                Arguments.of("NO_SIGNS", null, "No signs noticed."),
+                Arguments.of("UNKNOWN", null, "Signs not observed / unknown."),
+                Arguments.of(null, null, "Signs noticed: weak and not eating"),
+                Arguments.of(null, null, "No signs noticed."),
+                Arguments.of(null, null, "Signs not observed / unknown."),
+                Arguments.of(null, null, "Older client: weak and not eating")
+        );
+    }
+
+    @ParameterizedTest
+    @MethodSource("validHealthObservations")
+    void savesValidStructuredAndLegacyObservations(String observation, String signs, String details) {
+        LocalDate date = LocalDate.now(ZoneId.of("Asia/Manila")).minusDays(1);
+        when(dateValidation.resolve(date)).thenReturn(date);
+        Batch batch = batch(55);
+        when(batchService.requireBatchForUpdate(10L, 7L)).thenReturn(batch);
+        when(eventRepository.save(any(BatchEvent.class))).thenAnswer(invocation -> {
+            BatchEvent event = invocation.getArgument(0);
+            event.setId(99L);
+            return event;
+        });
+        MortalityAccountingService.MortalityAccountingResult result = service.record(10L, 7L, 21L,
+                healthDeath(date, details, observation, signs));
+        assertThat(result.event().getDetails()).isEqualTo(details);
+        assertThat(result.remainingPopulation()).isEqualTo(54);
+        assertThat(batch.getCurrentPopulation()).isEqualTo(54);
+    }
+
+    static Stream<Arguments> invalidHealthObservations() {
+        return Stream.of(
+                Arguments.of("SIGNS", "   ", "Signs noticed: "),
+                Arguments.of("SIGNS", "\nweak", "Signs noticed: \nweak"),
+                Arguments.of("SIGNS", "cough", "No signs noticed."),
+                Arguments.of("NO_SIGNS", "cough", "No signs noticed."),
+                Arguments.of("NO_SIGNS", null, "Signs noticed: coughing"),
+                Arguments.of("UNKNOWN", null, "No signs noticed."),
+                Arguments.of("INVALID", null, "Unknown"),
+                Arguments.of(null, null, null),
+                Arguments.of(null, null, "Signs noticed:   "),
+                Arguments.of(null, null, "Signs noticed:\nOther details")
+        );
+    }
+
+    @ParameterizedTest
+    @MethodSource("invalidHealthObservations")
+    void rejectsInvalidObservationsBeforeChangingPopulation(String observation, String signs, String details) {
+        LocalDate date = LocalDate.now(ZoneId.of("Asia/Manila")).minusDays(1);
+        when(dateValidation.resolve(date)).thenReturn(date);
+        Batch batch = batch(55);
+        when(batchService.requireBatchForUpdate(10L, 7L)).thenReturn(batch);
+
+        assertThatThrownBy(() -> service.record(10L, 7L, 21L,
+                healthDeath(date, details, observation, signs))).isInstanceOf(BadRequestException.class);
+        assertThat(batch.getCurrentPopulation()).isEqualTo(55);
+        verify(eventRepository, never()).save(any());
+        verifyNoInteractions(batchRepository, publisher);
+    }
+
+    @Test
+    void replaysPreviouslySavedLegacyDeathWithoutApplyingNewValidationOrDeductingAgain() {
+        LocalDate date = LocalDate.now(ZoneId.of("Asia/Manila")).minusDays(1);
+        UUID operationId = UUID.randomUUID();
+        when(dateValidation.resolve(date)).thenReturn(date);
+        Batch batch = batch(55);
+        when(batchService.requireBatchForUpdate(10L, 7L)).thenReturn(batch);
+        BatchEvent existing = new BatchEvent();
+        existing.setId(98L);
+        existing.setBatchId(10L);
+        existing.setOperationId(operationId);
+        existing.setEventDate(date);
+        existing.setEventType(EventType.HEALTH_DEATH);
+        existing.setTitle("Health-related death");
+        existing.setAffectedCount(1);
+        existing.setPopulationDelta(-1);
+        existing.setDetails("Signs noticed: ");
+        when(eventRepository.findByOperationId(operationId)).thenReturn(Optional.of(existing));
+        var retry = new CreateBatchEventRequest(date, EventType.HEALTH_DEATH,
+                "Health-related death", null, 1, "Signs noticed: ", null, operationId, null);
+
+        assertThat(service.record(10L, 7L, 21L, retry).event().getId()).isEqualTo(98L);
+        assertThat(batch.getCurrentPopulation()).isEqualTo(55);
+        verify(eventRepository, never()).save(any());
+        verifyNoInteractions(batchRepository, publisher);
+    }
+
+    @Test
+    void structuredReplayCannotReplaceMissingDetailsOnAnExistingLegacyDeath() {
+        LocalDate date = LocalDate.now(ZoneId.of("Asia/Manila")).minusDays(1);
+        UUID operationId = UUID.randomUUID();
+        when(dateValidation.resolve(date)).thenReturn(date);
+        Batch batch = batch(55);
+        when(batchService.requireBatchForUpdate(10L, 7L)).thenReturn(batch);
+        BatchEvent existing = new BatchEvent();
+        existing.setId(98L);
+        existing.setBatchId(10L);
+        existing.setOperationId(operationId);
+        existing.setEventDate(date);
+        existing.setEventType(EventType.HEALTH_DEATH);
+        existing.setTitle("Health-related death");
+        existing.setAffectedCount(1);
+        existing.setPopulationDelta(-1);
+        when(eventRepository.findByOperationId(operationId)).thenReturn(Optional.of(existing));
+        var changed = new CreateBatchEventRequest(date, EventType.HEALTH_DEATH,
+                "Health-related death", null, 1, "Signs noticed: coughing", null, operationId,
+                null, null, null, null, "SIGNS", "coughing");
+
+        assertThatThrownBy(() -> service.record(10L, 7L, 21L, changed)).isInstanceOf(ConflictException.class);
+        assertThat(batch.getCurrentPopulation()).isEqualTo(55);
+        verify(eventRepository, never()).save(any());
+        verifyNoInteractions(batchRepository, publisher);
+    }
+
+    private static CreateBatchEventRequest healthDeath(LocalDate date, String details, String observation, String signs) {
+        return new CreateBatchEventRequest(date, EventType.HEALTH_DEATH, "Health-related death", null,
+                1, details, null, UUID.randomUUID(), null, null, null, null, observation, signs);
+    }
+
+    @Test
     void deductsPopulationAndReturnsRemainingPopulationWithoutDailyRecord() {
         LocalDate date = LocalDate.now(ZoneId.of("Asia/Manila")).minusDays(1);
         when(dateValidation.resolve(date)).thenReturn(date);
@@ -81,7 +225,7 @@ class MortalityAccountingServiceTest {
         MortalityAccountingService.MortalityAccountingResult result = service.record(
                 10L, 7L, 21L,
                 new CreateBatchEventRequest(date, EventType.MORTALITY,
-                        "Unknown", null, 3, null, null));
+                        "Unknown", null, 3, "Signs not observed / unknown.", null));
 
         assertThat(batch.getCurrentPopulation()).isEqualTo(52);
         assertThat(result.remainingPopulation()).isEqualTo(52);

@@ -81,7 +81,41 @@ class BatchServiceTest {
         assertThat(response.id()).isEqualTo(11L);
         assertThat(response.farmId()).isEqualTo(7L);
         assertThat(response.name()).isEqualTo("September flock");
+        assertThat(response.bloodline()).isEqualTo("Sweater");
+        assertThat(response.derbyDate()).isEqualTo(LocalDate.of(2027, 1, 15));
         verify(batchRepository).save(any(Batch.class));
+    }
+
+    @Test
+    void rejectsBlankBloodlineForNewBatches() {
+        CreateBatchRequest request = new CreateBatchRequest("September flock", 25,
+                LocalDate.of(2026, 9, 12), 1L, "  ", null, List.of());
+
+        assertThatThrownBy(() -> batchService.create(request, 7L))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessage("Bloodline is required");
+
+        verifyNoInteractions(batchRepository, stageRepository, assignmentRepository, userRepository);
+    }
+
+    @Test
+    void canChangeAndClearTheOptionalDerbyDateWithinTheFarm() {
+        LifecycleStage stage = new LifecycleStage("brooding", 0);
+        stage.setId(1L);
+        Batch batch = new Batch();
+        batch.setId(11L);
+        batch.setFarmId(7L);
+        batch.setName("September flock");
+        batch.setStartDate(LocalDate.of(2026, 9, 12));
+        batch.setHatchDate(LocalDate.of(2026, 9, 12));
+        batch.setStage(stage);
+        when(batchRepository.findByIdAndFarmId(11L, 7L)).thenReturn(Optional.of(batch));
+        when(stageRepository.findByNameIgnoreCase("brooding")).thenReturn(Optional.of(stage));
+        when(batchRepository.save(any(Batch.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        assertThat(batchService.updateDerbyDate(11L, 7L, LocalDate.of(2027, 2, 1)).derbyDate())
+                .isEqualTo(LocalDate.of(2027, 2, 1));
+        assertThat(batchService.updateDerbyDate(11L, 7L, null).derbyDate()).isNull();
     }
 
     @Test
@@ -102,7 +136,7 @@ class BatchServiceTest {
                 25,
                 LocalDate.of(2026, 9, 12),
                 1L,
-                null,
+                "Sweater",
                 null,
                 List.of(33L));
 
@@ -118,7 +152,7 @@ class BatchServiceTest {
                 25,
                 LocalDate.of(2026, 9, 13),
                 1L,
-                null,
+                "Sweater",
                 null,
                 List.of());
 
@@ -135,8 +169,11 @@ class BatchServiceTest {
                 25,
                 LocalDate.of(2026, 9, 12),
                 1L,
+                "  Sweater  ",
                 null,
-                null,
-                List.of());
+                List.of(),
+                LocalDate.of(2026, 9, 12),
+                LocalDate.of(2026, 9, 12),
+                LocalDate.of(2027, 1, 15));
     }
 }

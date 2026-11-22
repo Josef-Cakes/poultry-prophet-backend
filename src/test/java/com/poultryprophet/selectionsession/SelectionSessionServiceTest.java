@@ -4,7 +4,14 @@ import com.poultryprophet.batch.Batch;
 import com.poultryprophet.batch.BatchService;
 import com.poultryprophet.common.BadRequestException;
 import com.poultryprophet.event.BatchEventRepository;
+import com.poultryprophet.finance.FinancialTransactionRepository;
+import com.poultryprophet.input.FarmInputLogRepository;
 import com.poultryprophet.population.PopulationProjectionService;
+import com.poultryprophet.selectionreview.BatchSelectionReview;
+import com.poultryprophet.selectionreview.BatchSelectionReviewRepository;
+import com.poultryprophet.selectionreview.ManagerReviewStatus;
+import com.poultryprophet.selectionreview.SelectionReviewStatus;
+import com.poultryprophet.sexcomposition.BatchSexCompositionRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -32,7 +39,67 @@ class SelectionSessionServiceTest {
 
     @Mock private BatchSelectionSessionRepository repository;
     @Mock private BatchEventRepository eventRepository;
+    @Mock private FarmInputLogRepository inputRepository;
+    @Mock private FinancialTransactionRepository financeRepository;
+    @Mock private BatchSexCompositionRepository sexCompositionRepository;
+    @Mock private BatchSelectionReviewRepository reviewRepository;
     @Mock private BatchService batchService;
+
+    @Test
+    void linksANewOutcomeToAFinalizedInPersonReport() {
+        LocalDate today = today();
+        Batch batch = batch(20, today.minusDays(10));
+        UUID operationId = UUID.randomUUID();
+        BatchSelectionReview review = new BatchSelectionReview();
+        review.setId(44L);
+        review.setFarmId(FARM_ID);
+        review.setBatchId(BATCH_ID);
+        review.setStatus(SelectionReviewStatus.FINALIZED);
+        review.setReviewStatus(ManagerReviewStatus.FOR_IN_PERSON_ASSESSMENT);
+        review.setAsOfDate(today.minusDays(1));
+        when(batchService.requireBatch(BATCH_ID, FARM_ID)).thenReturn(batch);
+        when(repository.findByOperationId(operationId)).thenReturn(Optional.empty());
+        when(reviewRepository.findByIdAndFarmIdAndBatchId(44L, FARM_ID, BATCH_ID)).thenReturn(Optional.of(review));
+        when(eventRepository.findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(
+                BATCH_ID, batch.getStartDate(), today)).thenReturn(List.of());
+        when(repository.save(any(BatchSelectionSession.class))).thenAnswer(invocation -> {
+            BatchSelectionSession session = invocation.getArgument(0);
+            session.setId(91L);
+            return session;
+        });
+
+        SelectionSessionResponse response = linkedService().create(BATCH_ID, FARM_ID, REVIEWER_ID,
+                new CreateSelectionSessionRequest(today, 10, 4, 2, 0, 0, Set.of(), null, null,
+                        operationId, 44L, false), null);
+
+        assertThat(response.selectionReviewId()).isEqualTo(44L);
+        assertThat(response.sourceDataAcknowledged()).isFalse();
+    }
+
+    @Test
+    void rejectsANewOutcomeWhenTheReportIsNotFinalizedForInPersonSelection() {
+        LocalDate today = today();
+        Batch batch = batch(20, today.minusDays(10));
+        UUID operationId = UUID.randomUUID();
+        BatchSelectionReview review = new BatchSelectionReview();
+        review.setId(44L);
+        review.setFarmId(FARM_ID);
+        review.setBatchId(BATCH_ID);
+        review.setStatus(SelectionReviewStatus.DRAFT);
+        review.setReviewStatus(ManagerReviewStatus.NOT_REVIEWED);
+        review.setAsOfDate(today);
+        when(batchService.requireBatch(BATCH_ID, FARM_ID)).thenReturn(batch);
+        when(repository.findByOperationId(operationId)).thenReturn(Optional.empty());
+        when(reviewRepository.findByIdAndFarmIdAndBatchId(44L, FARM_ID, BATCH_ID)).thenReturn(Optional.of(review));
+        when(eventRepository.findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(
+                BATCH_ID, batch.getStartDate(), today)).thenReturn(List.of());
+
+        assertThatThrownBy(() -> linkedService().create(BATCH_ID, FARM_ID, REVIEWER_ID,
+                new CreateSelectionSessionRequest(today, 10, 4, 2, 0, 0, Set.of(), null, null,
+                        operationId, 44L, false), null))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("Finalize the batch review report");
+    }
 
     @Test
     void recordsAValidDraftWithAnIncompleteOutcomeDistribution() {
@@ -114,7 +181,7 @@ class SelectionSessionServiceTest {
         when(repository.findByIdAndFarmIdAndBatchId(91L, FARM_ID, BATCH_ID)).thenReturn(Optional.of(existing));
         when(eventRepository.findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(
                 BATCH_ID, batch.getStartDate(), storedDate)).thenReturn(List.of());
-        when(repository.save(existing)).thenReturn(existing);
+        when(repository.saveAndFlush(existing)).thenReturn(existing);
         CreateSelectionSessionRequest update = request(null, 10, 4, 2, 4, 0, UUID.randomUUID());
 
         SelectionSessionResponse response = service().updateDraft(BATCH_ID, FARM_ID, 91L, update);
@@ -127,6 +194,11 @@ class SelectionSessionServiceTest {
     private SelectionSessionService service() {
         return new SelectionSessionService(repository, eventRepository, batchService,
                 new PopulationProjectionService(), "Asia/Manila");
+    }
+
+    private SelectionSessionService linkedService() {
+        return new SelectionSessionService(repository, eventRepository, inputRepository, financeRepository,
+                sexCompositionRepository, reviewRepository, batchService, new PopulationProjectionService(), "Asia/Manila");
     }
 
     private static Batch batch(int initialPopulation, LocalDate startDate) {

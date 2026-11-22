@@ -21,6 +21,6 @@ public class DashboardController {
 
     @GetMapping("/dashboard")
     public List<BatchDashboardResponse> dashboard(@AuthenticationPrincipal CustomUserDetails principal) {
-        return dashboardService.listForFarm(principal.getFarmId());
+        return dashboardService.listForFarm(principal.getFarmId(), principal.getUser().getRole());
     }
 }

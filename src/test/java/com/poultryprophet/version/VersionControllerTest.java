@@ -24,4 +24,13 @@ class VersionControllerTest {
         assertThat(response.environment()).isEqualTo("validation");
         assertThat(response.compatibleFrontendVersion()).isEqualTo("0.1.0-validation");
     }
+    @Test
+    void oldMetadataFieldsRemainAndUnapprovedReceiptsAreNotAdvertised() {
+        var tree = new com.fasterxml.jackson.databind.ObjectMapper().valueToTree(new VersionController(new ReleaseProperties()).version());
+        assertThat(tree.has("compatibleFrontendVersion")).isTrue();
+        assertThat(tree.path("offlineCapabilities").has("commandReceipts")).isTrue();
+        assertThat(tree.path("offlineCapabilities").path("commandReceipts").asBoolean()).isFalse();
+        assertThat(tree.path("offlineCapabilities").path("receiptEntityTypes").isEmpty()).isTrue();
+    }
+
 }

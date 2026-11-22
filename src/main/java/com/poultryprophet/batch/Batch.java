@@ -47,6 +47,10 @@ public class Batch {
     @Column(name = "farm_entry_date")
     private LocalDate farmEntryDate;
 
+    /** Optional scheduled date, recorded as a calendar date in the farm's context. */
+    @Column(name = "derby_date")
+    private LocalDate derbyDate;
+
     @Column(name = "hatch_date_confirmed_at")
     private Instant hatchDateConfirmedAt;
 
@@ -56,7 +60,7 @@ public class Batch {
     /**
      * Blueprint 5.3: bloodline/breed is collected as descriptive, filterable metadata only.
      * It is deliberately NOT used in scoring (breed-based scoring cannot be validated without
-     * large cross-breed outcome data). Nullable.
+     * large cross-breed outcome data). Nullable for legacy batches.
      */
     @Column
     private String bloodline;
@@ -163,6 +167,14 @@ public class Batch {
 
     public void setFarmEntryDate(LocalDate farmEntryDate) {
         this.farmEntryDate = farmEntryDate;
+    }
+
+    public LocalDate getDerbyDate() {
+        return derbyDate;
+    }
+
+    public void setDerbyDate(LocalDate derbyDate) {
+        this.derbyDate = derbyDate;
     }
 
     public Instant getHatchDateConfirmedAt() { return hatchDateConfirmedAt; }

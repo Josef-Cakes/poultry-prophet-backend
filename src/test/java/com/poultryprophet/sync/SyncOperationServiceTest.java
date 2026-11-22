@@ -48,24 +48,31 @@ class SyncOperationServiceTest {
     @Mock private BatchSelectionSessionRepository selectionSessionRepository;
     @Mock private DailyRecordService dailyRecordService;
     @Mock private JdbcTemplate jdbcTemplate;
+    @Mock private com.poultryprophet.selectionsession.SelectionSessionCommandService selectionCommands;
+    @Mock private CommandReceiptService commandReceipts;
 
     private ObjectMapper objectMapper;
     private SyncOperationService service;
+    private RemainingCommandService remainingCommands;
 
     @BeforeEach
     void setUp() {
         objectMapper = new ObjectMapper().findAndRegisterModules();
+        org.mockito.Mockito.lenient().when(commandReceipts.executeOnce(any(), any(), any(), any())).thenAnswer(invocation ->
+                new CommandReceiptService.Execution<>(((java.util.function.Supplier<?>)invocation.getArgument(3)).get(), false));
+        org.mockito.Mockito.lenient().when(jdbcTemplate.queryForObject("SELECT to_regclass('offline_daily_record_receipt') IS NOT NULL",Boolean.class)).thenReturn(true);
+        remainingCommands = new RemainingCommandService(commandReceipts, objectMapper,
+                java.time.Clock.system(java.time.ZoneId.of("Asia/Manila")), eventService, inputService, null, selectionSessionService, null, null);
         Validator validator = Validation.buildDefaultValidatorFactory().getValidator();
         service = new SyncOperationService(objectMapper, eventService, inputService, eventRepository, inputRepository,
                 selectionSessionService, selectionSessionRepository, validator, null, null, null, null,
-                java.time.Clock.system(java.time.ZoneId.of("Asia/Manila")), null, dailyRecordService, jdbcTemplate);
+                java.time.Clock.system(java.time.ZoneId.of("Asia/Manila")), null, dailyRecordService, jdbcTemplate, selectionCommands, commandReceipts, remainingCommands);
     }
 
     @Test
     void appliesManagerSelectionSessionDraftThroughTheOutbox() {
         UUID operationId = UUID.randomUUID();
         CreateSelectionSessionRequest payload = request(operationId);
-        when(selectionSessionRepository.findByOperationId(operationId)).thenReturn(java.util.Optional.empty());
         when(selectionSessionService.create(7L, 2L, 4L, payload, null)).thenReturn(response(81L, operationId));
 
         SyncOperationsResponse result = service.sync(syncRequest(operationId, "SELECTION_SESSION", objectMapper.valueToTree(payload)),
@@ -94,14 +101,22 @@ class SyncOperationServiceTest {
         CreateSelectionSessionRequest payload = request(operationId);
         ObjectNode update = objectMapper.valueToTree(payload);
         update.put("sessionId", 81L);
-        when(selectionSessionService.updateDraft(7L, 2L, 81L, payload)).thenReturn(response(81L, operationId));
+        when(selectionCommands.update(7L, 2L, 4L, 81L, payload)).thenReturn(new CommandReceiptService.Execution<>(response(81L, operationId), false));
 
         SyncOperationsResponse result = service.sync(syncRequest(operationId, "SELECTION_SESSION_UPDATE", update),
                 2L, 4L, Role.MANAGER);
 
         assertEquals("APPLIED", result.results().getFirst().status());
         assertEquals(81L, result.results().getFirst().serverId());
-        verify(selectionSessionService).updateDraft(7L, 2L, 81L, payload);
+        verify(selectionCommands).update(7L, 2L, 4L, 81L, payload);
+    }
+
+    @Test
+    void handlersCannotCreateOrReplaceVaccinationSchedulesThroughSync() {
+        UUID id = UUID.randomUUID();
+        ObjectNode payload = objectMapper.createObjectNode().put("operationId", id.toString()).put("action", "ASSIGN").put("programId", 1);
+        assertEquals("REJECTED", service.sync(syncRequest(id, "VACCINATION_SCHEDULE", payload), 2L, 4L, Role.HANDLER)
+                .results().getFirst().status());
     }
 
     @Test
@@ -133,7 +148,7 @@ class SyncOperationServiceTest {
                 .put("temperatureC", 99).put("operationId", id.toString()).put("ownerUserId", 4).put("ownerFarmId", 2);
         assertEquals("REJECTED", service.sync(syncRequest(id, "DAILY_RECORD", payload), 2L, 4L, Role.HANDLER)
                 .results().getFirst().status());
-        verifyNoInteractions(dailyRecordService, jdbcTemplate);
+        verifyNoInteractions(dailyRecordService, jdbcTemplate, selectionCommands, commandReceipts);
     }
 
     @Test
@@ -142,8 +157,8 @@ class SyncOperationServiceTest {
         ObjectNode payload = objectMapper.createObjectNode().put("recordDate", "2026-10-07")
                 .put("temperatureC", 30).put("operationId", id.toString()).put("ownerUserId", 4).put("ownerFarmId", 2);
         when(jdbcTemplate.update(any(String.class), any(Object[].class))).thenReturn(0);
-        when(jdbcTemplate.query(any(String.class), org.mockito.ArgumentMatchers.<org.springframework.jdbc.core.RowMapper<Long>>any(),
-                any(Object[].class))).thenReturn(java.util.List.of(42L));
+        when(jdbcTemplate.query(any(String.class), org.mockito.ArgumentMatchers.<org.springframework.jdbc.core.RowMapper<com.poultryprophet.sync.dto.SyncOperationResult>>any(),
+                any(Object[].class))).thenReturn(java.util.List.of(com.poultryprophet.sync.dto.SyncOperationResult.alreadyApplied(id,42L)));
         var result = service.sync(syncRequest(id, "DAILY_RECORD", payload), 2L, 4L, Role.HANDLER).results().getFirst();
         assertEquals("ALREADY_APPLIED", result.status());
         assertEquals(42L, result.serverId());
@@ -171,7 +186,7 @@ class SyncOperationServiceTest {
         ObjectNode payload = objectMapper.createObjectNode().put("recordDate", "2026-10-07")
                 .put("temperatureC", 30).put("operationId", id.toString()).put("ownerUserId", 4).put("ownerFarmId", 2);
         when(jdbcTemplate.update(any(String.class), any(Object[].class))).thenReturn(0);
-        when(jdbcTemplate.query(any(String.class), org.mockito.ArgumentMatchers.<org.springframework.jdbc.core.RowMapper<Long>>any(),
+        when(jdbcTemplate.query(any(String.class), org.mockito.ArgumentMatchers.<org.springframework.jdbc.core.RowMapper<com.poultryprophet.sync.dto.SyncOperationResult>>any(),
                 any(Object[].class))).thenReturn(java.util.List.of());
         assertEquals("CONFLICT", service.sync(syncRequest(id, "DAILY_RECORD", payload), 2L, 4L, Role.HANDLER)
                 .results().getFirst().status());
@@ -185,7 +200,7 @@ class SyncOperationServiceTest {
                 .put("temperatureC", 30).put("operationId", id.toString()).put("ownerUserId", 4).put("ownerFarmId", 2);
         assertEquals("CONFLICT", service.sync(syncRequest(id, "DAILY_RECORD", payload), 2L, 5L, Role.HANDLER).results().getFirst().status());
         assertEquals("CONFLICT", service.sync(syncRequest(id, "DAILY_RECORD", payload), 3L, 4L, Role.HANDLER).results().getFirst().status());
-        verifyNoInteractions(dailyRecordService, jdbcTemplate);
+        verifyNoInteractions(dailyRecordService, jdbcTemplate, selectionCommands, commandReceipts);
     }
 
     @Test
@@ -195,7 +210,7 @@ class SyncOperationServiceTest {
         when(transactionManager.getTransaction(any())).thenReturn(transaction);
         service = new SyncOperationService(objectMapper, eventService, inputService, eventRepository, inputRepository,
                 selectionSessionService, selectionSessionRepository, Validation.buildDefaultValidatorFactory().getValidator(),
-                null, null, null, null, java.time.Clock.systemUTC(), transactionManager, dailyRecordService, jdbcTemplate);
+                null, null, null, null, java.time.Clock.systemUTC(), transactionManager, dailyRecordService, jdbcTemplate, selectionCommands, commandReceipts, remainingCommands);
         UUID id = UUID.randomUUID();
         ObjectNode payload = objectMapper.createObjectNode().put("recordDate", "2026-10-07")
                 .put("temperatureC", 30).put("operationId", id.toString()).put("ownerUserId", 4).put("ownerFarmId", 2);
@@ -219,6 +234,27 @@ class SyncOperationServiceTest {
         assertEquals("APPLIED", service.sync(request, 2L, 4L, Role.HANDLER).results().getFirst().status());
         var captured = org.mockito.ArgumentCaptor.forClass(com.poultryprophet.event.dto.CreateBatchEventRequest.class);
         verify(eventService).create(eq(7L), eq(2L), eq(4L), captured.capture());
+        assertEquals(LocalDate.of(2026, 10, 7), captured.getValue().eventDate());
+    }
+
+    @Test
+    void replayPreservesStructuredDeathObservationsWhenDerivingFarmDate() {
+        UUID operationId = UUID.randomUUID();
+        ObjectNode payload = objectMapper.createObjectNode().put("eventType", "HEALTH_DEATH")
+                .put("title", "Health-related death").put("affectedCount", 1)
+                .put("details", "Signs noticed: coughing")
+                .put("deathObservation", "SIGNS").put("deathSigns", "coughing")
+                .put("operationId", operationId.toString());
+        var saved = mock(com.poultryprophet.event.dto.BatchEventResponse.class);
+        when(saved.id()).thenReturn(42L);
+        when(eventService.create(eq(7L), eq(2L), eq(4L), any())).thenReturn(saved);
+
+        var result = service.sync(syncRequest(operationId, "BATCH_EVENT", payload), 2L, 4L, Role.HANDLER);
+        assertEquals("APPLIED", result.results().getFirst().status());
+        var captured = org.mockito.ArgumentCaptor.forClass(com.poultryprophet.event.dto.CreateBatchEventRequest.class);
+        verify(eventService).create(eq(7L), eq(2L), eq(4L), captured.capture());
+        assertEquals("SIGNS", captured.getValue().deathObservation());
+        assertEquals("coughing", captured.getValue().deathSigns());
         assertEquals(LocalDate.of(2026, 10, 7), captured.getValue().eventDate());
     }
 

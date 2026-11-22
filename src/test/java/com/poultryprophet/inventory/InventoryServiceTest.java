@@ -30,6 +30,21 @@ class InventoryServiceTest {
     @Mock private FinanceService financeService;
 
     @Test
+    void marksOnlyProductsWithDocumentedDemoStockForBothRoles() {
+        FarmProduct demo = product("sachet", "5");
+        FarmProduct ordinary = product("pack", "3");
+        ordinary.setId(11L);
+        when(productRepository.findByFarmIdAndActiveOrderByBrandNameAsc(3L, true)).thenReturn(java.util.List.of(demo, ordinary));
+        when(movementRepository.findProductsWithDemoStockHistory(3L, InventoryMovementType.STOCK_IN)).thenReturn(java.util.List.of(10L));
+
+        var result = new InventoryService(productRepository, movementRepository, batchService, financeService).listProducts(3L, false);
+        assertThat(result.get(0).demoStockHistory()).isTrue();
+        assertThat(result.get(0).forRole(com.poultryprophet.user.Role.HANDLER).demoStockHistory()).isTrue();
+        assertThat(result.get(0).forRole(com.poultryprophet.user.Role.HANDLER).averageUnitCost()).isNull();
+        assertThat(result.get(1).demoStockHistory()).isFalse();
+    }
+
+    @Test
     void deductsOneTrackedUseAndStoresTheNewBalance() {
         FarmProduct product = product("sachet", "5");
         product.setAverageUnitCost(new BigDecimal("12.50"));

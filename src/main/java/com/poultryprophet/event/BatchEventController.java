@@ -25,8 +25,10 @@ public class BatchEventController {
 
     private final BatchEventService eventService;
 
-    public BatchEventController(BatchEventService eventService) {
+    private final com.poultryprophet.sync.RemainingCommandService commands;
+    public BatchEventController(BatchEventService eventService, com.poultryprophet.sync.RemainingCommandService commands) {
         this.eventService = eventService;
+        this.commands = commands;
     }
 
     @PostMapping
@@ -34,8 +36,9 @@ public class BatchEventController {
             @PathVariable Long batchId,
             @Valid @RequestBody CreateBatchEventRequest req,
             @AuthenticationPrincipal CustomUserDetails principal) {
-        BatchEventResponse response = eventService.create(
-                batchId, principal.getFarmId(), principal.getId(), req);
+        BatchEventResponse response = req.operationId() == null
+                ? eventService.create(batchId, principal.getFarmId(), principal.getId(), req)
+                : commands.event(batchId, principal.getFarmId(), principal.getId(), req, null).response();
         return ResponseEntity.status(HttpStatus.CREATED).body(response.forRole(principal.getUser().getRole()));
     }
 

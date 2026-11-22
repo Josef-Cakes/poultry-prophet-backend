@@ -13,6 +13,7 @@ public record BatchDashboardSummary(
         int recordedHealthEvents,
         int activeAlertCount,
         Severity highestActiveAlertSeverity,
-        LocalDate lastEventDate
+        LocalDate lastEventDate,
+        BatchFinanceSnapshot finance
 ) {
 }

@@ -47,6 +47,7 @@ public class PopulationProjectionService {
 
         int initial = batch.getInitialPopulation();
         long calculated = initial;
+        long allowedMaximum = Math.max(0L, initial);
         String issueCode = null;
         Long firstInvalidEventId = null;
         LocalDate firstInvalidEventDate = null;
@@ -62,12 +63,19 @@ public class PopulationProjectionService {
                 continue;
             }
 
+            if (event.getEventType() == EventType.TRANSFER_IN && resolution.delta() > 0) {
+                allowedMaximum += resolution.delta();
+            }
             calculated += resolution.delta();
             if (issueCode == null && calculated < 0) {
                 issueCode = "BELOW_ZERO";
                 firstInvalidEventId = event.getId();
                 firstInvalidEventDate = event.getEventDate();
-            } else if (issueCode == null && calculated > initial) {
+            } else if (issueCode == null && calculated > Integer.MAX_VALUE) {
+                issueCode = "POPULATION_OVERFLOW";
+                firstInvalidEventId = event.getId();
+                firstInvalidEventDate = event.getEventDate();
+            } else if (issueCode == null && calculated > allowedMaximum) {
                 issueCode = "ABOVE_INITIAL";
                 firstInvalidEventId = event.getId();
                 firstInvalidEventDate = event.getEventDate();
@@ -78,7 +86,7 @@ public class PopulationProjectionService {
                 && asOfDate.equals(LocalDate.now(farmZone));
         int currentPopulation = batch.getCurrentPopulation();
         if (compareStoredPopulation) {
-            if (issueCode == null && (currentPopulation < 0 || currentPopulation > initial)) {
+            if (issueCode == null && currentAsOfDate && (currentPopulation < 0 || currentPopulation > allowedMaximum)) {
                 issueCode = "STORED_COUNT_OUT_OF_RANGE";
             } else if (issueCode == null && currentAsOfDate && calculated != currentPopulation) {
                 issueCode = "STORED_COUNT_MISMATCH";
@@ -87,11 +95,11 @@ public class PopulationProjectionService {
 
         boolean reconciliationRequired = issueCode != null;
         Integer validPopulation = reconciliationRequired ? null : toInt(calculated);
-        int boundedPopulation = bounded(calculated, initial);
+        int boundedPopulation = bounded(calculated, allowedMaximum);
         String status = reconciliationRequired ? PopulationProjection.RECONCILIATION_REQUIRED
                 : PopulationProjection.VALID;
         String message = reconciliationRequired
-                ? message(batch, calculated, currentAsOfDate, issueCode, firstInvalidEventDate,
+                ? message(batch, calculated, allowedMaximum, currentAsOfDate, issueCode, firstInvalidEventDate,
                 compareStoredPopulation)
                 : null;
 
@@ -121,7 +129,7 @@ public class PopulationProjectionService {
         }
     }
 
-    private String message(Batch batch, long calculated, boolean currentAsOfDate,
+    private String message(Batch batch, long calculated, long allowedMaximum, boolean currentAsOfDate,
                            String issueCode, LocalDate firstInvalidEventDate,
                            boolean compareStoredPopulation) {
         if ("INVALID_EVENT".equals(issueCode)) {
@@ -135,12 +143,12 @@ public class PopulationProjectionService {
         }
         if ("BELOW_ZERO".equals(issueCode) || "ABOVE_INITIAL".equals(issueCode)) {
             return "Population events calculate " + calculated + " alive, outside the valid range of 0 to "
-                    + Math.max(0, batch.getInitialPopulation()) + dateSuffix(firstInvalidEventDate)
+                    + allowedMaximum + " (starting count plus transfers in)" + dateSuffix(firstInvalidEventDate)
                     + "; review duplicate, legacy, or incorrect population events.";
         }
         if ("STORED_COUNT_OUT_OF_RANGE".equals(issueCode)) {
             return "The stored current count is " + batch.getCurrentPopulation()
-                    + ", outside the valid range of 0 to " + Math.max(0, batch.getInitialPopulation())
+                    + ", outside the valid range of 0 to " + allowedMaximum + " (starting count plus transfers in)"
                     + "; review the batch count before using it.";
         }
         if (compareStoredPopulation && currentAsOfDate && "STORED_COUNT_MISMATCH".equals(issueCode)) {
@@ -154,8 +162,8 @@ public class PopulationProjectionService {
         return date == null ? "" : " on " + date;
     }
 
-    private int bounded(long value, int initial) {
-        long upper = Math.max(0L, initial);
+    private int bounded(long value, long allowedMaximum) {
+        long upper = Math.min(Integer.MAX_VALUE, Math.max(0L, allowedMaximum));
         return (int) Math.max(0L, Math.min(upper, value));
     }
 

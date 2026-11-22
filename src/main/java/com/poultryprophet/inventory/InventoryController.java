@@ -56,6 +56,15 @@ public class InventoryController {
         return service.movements(principal.getFarmId(), productId, batchId);
     }
 
+    @GetMapping("/demo-cost-impact")
+    @PreAuthorize("hasRole('MANAGER')")
+    public java.util.Map<String, Boolean> demoCostImpact(@RequestParam Long batchId,
+            @RequestParam java.time.LocalDate start, @RequestParam java.time.LocalDate end,
+            @RequestParam(required = false) java.time.Instant cutoff, @AuthenticationPrincipal CustomUserDetails principal) {
+        return java.util.Map.of("mayIncludeDemoStock", service.demoStockMayAffectBatchCost(
+                principal.getFarmId(), batchId, start, end, cutoff == null ? java.time.Instant.now() : cutoff));
+    }
+
     @GetMapping("/movements/page")
     @PreAuthorize("hasRole('MANAGER')")
     public PageResponse<InventoryMovementResponse> movementsPage(@RequestParam(defaultValue = "0") int page,

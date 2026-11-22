@@ -88,6 +88,11 @@ public class MortalityAccountingService {
         if (request.operationId() != null) {
             BatchEvent existing = eventRepository.findByOperationId(request.operationId()).orElse(null);
             if (existing != null) {
+                // Existing legacy retries still succeed without revalidating historical data.
+                // Structured retries must agree with the saved display text.
+                if (type == EventType.HEALTH_DEATH && request.deathObservation() != null) {
+                    validateDeathObservation(request);
+                }
                 if (!batchId.equals(existing.getBatchId())
                         || (existing.getEventType() != null && existing.getEventType() != type)
                         || (existing.getEventDate() != null && !java.util.Objects.equals(existing.getEventDate(), date))
@@ -100,7 +105,8 @@ public class MortalityAccountingService {
                         || !java.util.Objects.equals(existing.getOccurredAt(), request.occurredAt())
                         || !sameSale(existing, request.saleDetails())
                         || (existing.getTitle() != null && !java.util.Objects.equals(existing.getTitle(), request.title()))
-                        || (existing.getDetails() != null && !java.util.Objects.equals(existing.getDetails(), request.details()))
+                        || ((request.deathObservation() != null || existing.getDetails() != null)
+                            && !java.util.Objects.equals(existing.getDetails(), request.details()))
                         || (existing.getTags() != null && !java.util.Objects.equals(existing.getTags(), request.tags()))) {
                     throw new ConflictException("operationId has already been used for a different population event");
                 }
@@ -109,6 +115,7 @@ public class MortalityAccountingService {
         }
 
         validate(batch, date, request.affectedCount(), delta, type);
+        if (type == EventType.HEALTH_DEATH) validateDeathObservation(request);
 
         BatchEvent event = new BatchEvent();
         event.setBatchId(batchId);
@@ -129,6 +136,50 @@ public class MortalityAccountingService {
         validateChronologicalProjection(batch, date, event);
 
         return persistCanonicalEvent(batch, date, event, delta);
+    }
+
+    /** Validate what was recorded without treating the handler's observation as a diagnosis. */
+    private void validateDeathObservation(CreateBatchEventRequest request) {
+        String details = request.details();
+        String observation = request.deathObservation();
+        String signs = request.deathSigns();
+        if (observation == null) {
+            if (signs != null && !signs.isBlank()) {
+                throw new BadRequestException("Choose what was observed for this health-related death");
+            }
+            if (details == null || details.isBlank()) {
+                throw new BadRequestException("Record what was observed or that it is unknown");
+            }
+            // Older clients send an observation in details. A newline may introduce optional
+            // notes, so it cannot be used to disguise an empty 'Signs noticed:' value.
+            String firstLine = details.stripLeading().split("\\R", 2)[0];
+            if (firstLine.matches("(?i)^signs\\s+noticed\\s*:.*")
+                    && firstLine.replaceFirst("(?i)^signs\\s+noticed\\s*:", "").isBlank()) {
+                throw new BadRequestException("Describe the signs noticed");
+            }
+            return;
+        }
+        String expected;
+        switch (observation) {
+            case "SIGNS" -> {
+                if (signs == null || signs.isBlank() || signs.split("\\R", 2)[0].isBlank()) {
+                    throw new BadRequestException("Describe the signs noticed");
+                }
+                expected = "Signs noticed: " + signs.strip();
+            }
+            case "NO_SIGNS" -> {
+                if (signs != null && !signs.isBlank()) throw new BadRequestException("Signs do not match the observation choice");
+                expected = "No signs noticed.";
+            }
+            case "UNKNOWN" -> {
+                if (signs != null && !signs.isBlank()) throw new BadRequestException("Signs do not match the observation choice");
+                expected = "Signs not observed / unknown.";
+            }
+            default -> throw new BadRequestException("Choose a valid death observation");
+        }
+        if (details == null || !(details.equals(expected) || details.startsWith(expected + "\n"))) {
+            throw new BadRequestException("Recorded details do not match the death observation");
+        }
     }
 
     /**
@@ -245,9 +296,8 @@ public class MortalityAccountingService {
             throw new BadRequestException("This event would make the population negative; current alive: "
                     + batch.getCurrentPopulation());
         }
-        if (resultingPopulation > batch.getInitialPopulation()) {
-            throw new BadRequestException("This event would exceed the initial population of "
-                    + batch.getInitialPopulation());
+        if (resultingPopulation > Integer.MAX_VALUE) {
+            throw new BadRequestException("This event would exceed the maximum supported population");
         }
     }
 

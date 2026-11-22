@@ -40,6 +40,16 @@ public class GlobalExceptionHandler {
         return build(HttpStatus.CONFLICT, ex.getMessage());
     }
 
+    @ExceptionHandler(com.poultryprophet.sync.CommandReceiptsUnavailableException.class)
+    public ResponseEntity<ApiError> handleCommandReceiptsUnavailable(com.poultryprophet.sync.CommandReceiptsUnavailableException ex) {
+        return build(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage());
+    }
+
+    @ExceptionHandler(org.springframework.orm.ObjectOptimisticLockingFailureException.class)
+    public ResponseEntity<ApiError> handleStaleEdit(org.springframework.orm.ObjectOptimisticLockingFailureException ex) {
+        return build(HttpStatus.CONFLICT, "This record changed while you were editing. Review the current version before saving a new edit.");
+    }
+
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<ApiError> handleDataIntegrity(DataIntegrityViolationException ex,
                                                         HttpServletRequest request) {

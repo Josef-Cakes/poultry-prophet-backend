@@ -357,6 +357,9 @@ public class FinanceService {
         BigDecimal expense = BigDecimal.ZERO;
         long postedCount = 0;
         long voidedCount = 0;
+        long demoCount = 0;
+        BigDecimal demoExpense = BigDecimal.ZERO;
+        BigDecimal demoIncome = BigDecimal.ZERO;
 
         for (FinancialTransaction tx : values) {
             if (tx.getStatus() == FinanceTransactionStatus.VOIDED) {
@@ -365,6 +368,11 @@ public class FinanceService {
             }
             if (tx.getStatus() != FinanceTransactionStatus.POSTED) continue;
             postedCount++;
+            if (com.poultryprophet.common.DemoDataMarker.isMarked(tx.getDescription())) {
+                demoCount++;
+                if (tx.getType() == FinanceTransactionType.EXPENSE) demoExpense = demoExpense.add(tx.getAmount());
+                else demoIncome = demoIncome.add(tx.getAmount());
+            }
             LocalDate bucket = bucketStart(tx.getTransactionDate(), spanDays);
             if (tx.getType() == FinanceTransactionType.INCOME) {
                 income = income.add(tx.getAmount());
@@ -413,7 +421,7 @@ public class FinanceService {
                 new FinanceAnalyticsResponse.Totals(income, saleIncome, income.subtract(saleIncome), saleTransactionCount,
                         expense, income.subtract(expense), currencyProducts, totalRecordedBatchCost,
                         contribution, productCostComplete && currencyProducts != null, postedCount, voidedCount),
-                series, categoryTotals);
+                series, categoryTotals, demoCount, demoExpense, demoIncome);
     }
 
     private Specification<FinancialTransaction> transactionSpecification(Long farmId, LocalDate start, LocalDate end,

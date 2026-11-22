@@ -42,14 +42,33 @@ class PopulationProjectionServiceTest {
     }
 
     @Test
-    void marksAledgerThatGoesAboveTheInitialPopulation() {
-        Batch batch = batch(10, 10);
+    void permitsTransfersToRaisePopulationAboveTheInitialCount() {
+        Batch batch = batch(10, 11);
         PopulationProjection projection = service.project(batch,
                 List.of(event(13L, EventType.TRANSFER_IN, 1, null)), today(), zone);
 
+        assertThat(projection.validPopulation()).isEqualTo(11);
+        assertThat(projection.boundedPopulation()).isEqualTo(11);
+        assertThat(projection.reconciliationRequired()).isFalse();
+    }
+
+    @Test
+    void stillFlagsAnUnexplainedIncreaseAboveInitialAndTransfers() {
+        Batch batch = batch(10, 12);
+        PopulationProjection projection = service.project(batch,
+                List.of(event(13L, EventType.TRANSFER_IN, 1, null),
+                        event(14L, EventType.FOUND_RETURNED, 1, null)), today(), zone);
+
         assertThat(projection.validPopulation()).isNull();
-        assertThat(projection.issueCode()).isEqualTo("ABOVE_INITIAL");
-        assertThat(projection.boundedPopulation()).isEqualTo(10);
+        assertThat(projection.firstInvalidEventId()).isEqualTo(14L);
+    }
+
+    @Test
+    void historicalProjectionDoesNotRejectALaterTransferInTheStoredCount() {
+        Batch batch = batch(10, 11);
+        PopulationProjection projection = service.project(batch, List.of(), today().minusDays(2), zone);
+
+        assertThat(projection.validPopulation()).isEqualTo(10);
     }
 
     @Test

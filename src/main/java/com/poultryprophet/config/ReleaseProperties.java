@@ -6,6 +6,11 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "app.release")
 public class ReleaseProperties {
 
+    private org.springframework.boot.info.BuildProperties buildProperties;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setBuildProperties(org.springframework.boot.info.BuildProperties value) { this.buildProperties = value; }
+
     private String version = "0.1.0";
     private String commitSha = "unknown";
     private String buildTime = "unknown";
@@ -18,7 +23,10 @@ public class ReleaseProperties {
     public String getCommitSha() { return commitSha; }
     public void setCommitSha(String commitSha) { this.commitSha = commitSha; }
 
-    public String getBuildTime() { return buildTime; }
+    public String getBuildTime() {
+        if (buildTime != null && !buildTime.isBlank() && !"unknown".equalsIgnoreCase(buildTime)) return buildTime;
+        return buildProperties != null && buildProperties.getTime() != null ? buildProperties.getTime().toString() : buildTime;
+    }
     public void setBuildTime(String buildTime) { this.buildTime = buildTime; }
 
     public String getEnvironment() { return environment; }

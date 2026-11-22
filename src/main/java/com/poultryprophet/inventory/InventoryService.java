@@ -68,7 +68,19 @@ public class InventoryService {
         List<FarmProduct> products = includeInactive
                 ? productRepository.findByFarmIdOrderByActiveDescBrandNameAsc(farmId)
                 : productRepository.findByFarmIdAndActiveOrderByBrandNameAsc(farmId, true);
-        return products.stream().map(FarmProductResponse::from).toList();
+        var demoProductIds = new java.util.HashSet<>(movementRepository.findProductsWithDemoStockHistory(farmId, InventoryMovementType.STOCK_IN));
+        return products.stream().map(product -> FarmProductResponse.from(product, demoProductIds.contains(product.getId()))).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public boolean demoStockMayAffectBatchCost(Long farmId, Long batchId, java.time.LocalDate start,
+                                               java.time.LocalDate end, java.time.Instant cutoff) {
+        batchService.requireBatch(batchId, farmId);
+        if (start.isAfter(end)) throw new BadRequestException("Start date cannot be after end date");
+        java.time.ZoneId zone = java.time.ZoneId.of("Asia/Manila");
+        return movementRepository.existsUseAfterDemoStock(farmId, batchId, start.atStartOfDay(zone).toInstant(),
+                end.plusDays(1).atStartOfDay(zone).toInstant(), cutoff,
+                InventoryMovementType.USAGE, InventoryMovementType.STOCK_IN);
     }
 
     @Transactional

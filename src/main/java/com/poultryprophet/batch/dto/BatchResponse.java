@@ -33,8 +33,22 @@ public record BatchResponse(
         Instant archivedAt,
         Long archivedByUserId,
         String archiveReason,
-        BatchStatus preArchiveStatus
+        BatchStatus preArchiveStatus,
+        LocalDate derbyDate
 ) {
+    /** Compatibility constructor for internal callers that predate derby dates. */
+    public BatchResponse(Long id, Long farmId, String name, int initialPopulation, int currentPopulation,
+                         String populationStatus, String populationWarning, LocalDate startDate,
+                         LocalDate hatchDate, LocalDate farmEntryDate, String bloodline, String source,
+                         Instant hatchDateConfirmedAt, Long hatchDateConfirmedByUserId, Long stageId,
+                         String stageName, boolean stageAuto, BatchStatus status, List<Long> handlerUserIds,
+                         Instant createdAt, Instant archivedAt, Long archivedByUserId, String archiveReason,
+                         BatchStatus preArchiveStatus) {
+        this(id, farmId, name, initialPopulation, currentPopulation, populationStatus, populationWarning,
+                startDate, hatchDate, farmEntryDate, bloodline, source, hatchDateConfirmedAt,
+                hatchDateConfirmedByUserId, stageId, stageName, stageAuto, status, handlerUserIds,
+                createdAt, archivedAt, archivedByUserId, archiveReason, preArchiveStatus, null);
+    }
     /**
      * @param effectiveStage the stage to display — either the age-derived stage or the manual
      *                       override, as resolved by {@code BatchService#resolveStage}.
@@ -74,6 +88,7 @@ public record BatchResponse(
                 batch.getArchivedAt(),
                 batch.getArchivedByUserId(),
                 batch.getArchiveReason(),
-                batch.getPreArchiveStatus());
+                batch.getPreArchiveStatus(),
+                batch.getDerbyDate());
     }
 }

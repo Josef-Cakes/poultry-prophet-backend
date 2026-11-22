@@ -5,6 +5,7 @@ import com.poultryprophet.incubation.dto.CompleteIncubationRequest;
 import com.poultryprophet.incubation.dto.CreateBatchFromIncubationRequest;
 import com.poultryprophet.incubation.dto.CreateIncubationCycleRequest;
 import com.poultryprophet.incubation.dto.IncubationCycleResponse;
+import com.poultryprophet.incubation.dto.IncubationAttentionResponse;
 import com.poultryprophet.incubation.dto.UpdateIncubationCycleRequest;
 import com.poultryprophet.security.CustomUserDetails;
 import jakarta.validation.Valid;
@@ -47,6 +48,11 @@ public class IncubationController {
         return service.list(principal.getFarmId());
     }
 
+    @GetMapping("/attention")
+    public List<IncubationAttentionResponse> attention(@AuthenticationPrincipal CustomUserDetails principal) {
+        return service.attention(principal.getFarmId());
+    }
+
     @GetMapping("/{id}")
     public IncubationCycleResponse get(@PathVariable Long id,
                                        @AuthenticationPrincipal CustomUserDetails principal) {
@@ -83,6 +89,7 @@ public class IncubationController {
     public BatchResponse createBatch(@PathVariable Long id,
                                      @Valid @RequestBody CreateBatchFromIncubationRequest request,
                                      @AuthenticationPrincipal CustomUserDetails principal) {
-        return service.createBatch(id, principal.getFarmId(), request.farmEntryDate());
+        return service.createBatch(id, principal.getFarmId(), request.farmEntryDate(),
+                request.bloodline(), request.derbyDate());
     }
 }

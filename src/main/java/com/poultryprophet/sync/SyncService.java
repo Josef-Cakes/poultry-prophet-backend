@@ -6,7 +6,8 @@ import com.poultryprophet.common.DateValidationService;
 import com.poultryprophet.record.DailyRecord;
 import com.poultryprophet.record.DailyRecordRepository;
 import com.poultryprophet.record.DailyRecordService;
-import com.poultryprophet.record.SyncStatus;
+import com.poultryprophet.record.dto.CreateRecordRequest;
+import com.poultryprophet.common.ConflictException;
 import com.poultryprophet.sync.dto.ConflictType;
 import com.poultryprophet.sync.dto.SyncBatchRequest;
 import com.poultryprophet.sync.dto.SyncBatchResponse;
@@ -47,6 +48,8 @@ public class SyncService {
     }
 
     public SyncBatchResponse sync(SyncBatchRequest request, Long farmId, Long handlerId) {
+        org.slf4j.LoggerFactory.getLogger(SyncService.class).warn(
+                "Deprecated /api/sync/batch used: records={}; upgrade to UUID-scoped v2 commands. Client clocks cannot authorize overwrites.", request.records().size());
         List<SyncItemResult> results = new ArrayList<>();
         int synced = 0;
         int conflicts = 0;
@@ -56,36 +59,38 @@ public class SyncService {
             try {
                 // Validates the batch belongs to the syncing handler's farm.
                 Batch batch = batchService.requireBatch(item.batchId(), farmId);
-            dateValidation.validate(item.recordDate(), batch.getHatchDate());
+                dateValidation.validate(item.recordDate(), batch.getHatchDate());
 
                 DailyRecord existing = recordRepository
                         .findByBatchIdAndRecordDate(item.batchId(), item.recordDate())
                         .orElse(null);
                 ConflictType type = conflictResolver.classify(existing, item);
 
-                if (type == ConflictType.NEW || type == ConflictType.LOCAL_NEWER) {
-                    DailyRecord saved = recordService.upsert(item.batchId(), farmId, handlerId,
-                            item.recordDate(), item.temperatureC(), item.mortalityCount(),
-                            item.feedIntakeG(), item.waterIntakeMl(), item.behaviorNotes(),
-                            item.updatedAt(), SyncStatus.SYNCED);
-                    log(saved.getId(), 200, type.name());
-                    results.add(SyncItemResult.synced(item.clientId(), saved.getId(), type));
+                if (type == ConflictType.NEW) {
+                    var saved = recordService.recordOffline(item.batchId(), farmId,
+                            new CreateRecordRequest(item.recordDate(), item.temperatureC(), item.mortalityCount(),
+                                    item.feedIntakeG(), item.waterIntakeMl(), item.behaviorNotes()), handlerId);
+                    log(saved.id(), 200, type.name());
+                    results.add(SyncItemResult.synced(item.clientId(), saved.id(), type));
                     synced++;
                 } else if (type == ConflictType.IDENTICAL) {
-                    // Re-run the idempotent upsert. Legacy mortality reconciliation is
-                    // fail-closed unless explicitly enabled for a reviewed repair.
-                    DailyRecord canonical = recordService.upsert(item.batchId(), farmId, handlerId,
-                            item.recordDate(), item.temperatureC(), item.mortalityCount(),
-                            item.feedIntakeG(), item.waterIntakeMl(), item.behaviorNotes(),
-                            item.updatedAt(), SyncStatus.SYNCED);
-                    log(canonical.getId(), 200, type.name());
-                    results.add(SyncItemResult.synced(item.clientId(), canonical.getId(), type));
+                    // The existing record is authoritative. An identical legacy
+                    // retry is a read acknowledgement, not permission to upsert
+                    // or rerun mortality/indicator effects after archival.
+                    log(existing.getId(), 200, type.name());
+                    results.add(SyncItemResult.synced(item.clientId(), existing.getId(), type));
                     synced++;
-                } else { // SERVER_NEWER
+                } else { // Changed records require review, irrespective of the client clock.
                     log(existing.getId(), 409, type.name());
                     results.add(SyncItemResult.conflict(item.clientId(), existing.getId(), type));
                     conflicts++;
                 }
+            } catch (ConflictException ex) {
+                // A competing writer may have accepted this day after classification.
+                // recordOffline rechecks under the batch lock; never fall back to upsert.
+                log(null, 409, "CONCURRENT_RECORD");
+                results.add(SyncItemResult.conflict(item.clientId(), null, ConflictType.SERVER_NEWER));
+                conflicts++;
             } catch (Exception ex) {
                 log(null, 400, ex.getClass().getSimpleName());
                 results.add(SyncItemResult.failed(item.clientId(), ex.getMessage()));

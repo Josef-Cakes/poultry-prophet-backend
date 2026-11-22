@@ -1,5 +1,18 @@
 ALTER TABLE app_user ALTER COLUMN farm_id DROP NOT NULL;
 
+-- Validation databases do not run the reviewed Flyway track. Mirror V27 so offline
+-- replay is exercised against the same receipt table as a migrated deployment.
+CREATE TABLE IF NOT EXISTS offline_daily_record_receipt (
+    operation_id uuid PRIMARY KEY,
+    farm_id bigint NOT NULL,
+    user_id bigint NOT NULL,
+    batch_id bigint NOT NULL,
+    occurred_at timestamptz NOT NULL,
+    payload jsonb NOT NULL,
+    server_id bigint,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
 -- Long-lived credentials for PWA sessions. Store only a hash of the raw token.
 CREATE TABLE IF NOT EXISTS auth_refresh_token (
     id bigserial PRIMARY KEY,
@@ -21,7 +34,7 @@ ALTER TABLE batch ADD COLUMN IF NOT EXISTS stage_manual boolean NOT NULL DEFAULT
 ALTER TABLE batch DROP CONSTRAINT IF EXISTS batch_current_population_bounds;
 ALTER TABLE batch
     ADD CONSTRAINT batch_current_population_bounds
-    CHECK (current_population >= 0 AND current_population <= initial_population);
+    CHECK (current_population >= 0);
 
 -- Keep the lifecycle allow-list aligned with BatchStatus. Existing databases may still have
 -- the original ACTIVE/CLOSED-only constraint, which causes archive requests to fail with
@@ -226,6 +239,9 @@ ALTER TABLE handler_task ADD CONSTRAINT ck_handler_task_assignment_consistency
     CHECK ((assignment_scope = 'HANDLER' AND assigned_handler_id IS NOT NULL)
         OR (assignment_scope IN ('BATCH_TEAM', 'FARM_TEAM') AND assigned_handler_id IS NULL));
 CREATE INDEX IF NOT EXISTS idx_handler_task_batch_source ON handler_task(farm_id, batch_id, source_type, source_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_one_open_review_followup_per_batch
+    ON handler_task (farm_id, batch_id)
+    WHERE source_type = 'SELECTION_REVIEW_FOLLOWUP' AND status IN ('TODO', 'IN_PROGRESS', 'BLOCKED');
 CREATE INDEX IF NOT EXISTS idx_handler_task_farm_status_due ON handler_task(farm_id, status, due_at, id);
 CREATE INDEX IF NOT EXISTS idx_handler_task_handler_status_due ON handler_task(farm_id, assigned_handler_id, status, due_at, id);
 CREATE INDEX IF NOT EXISTS idx_handler_task_batch_status_due ON handler_task(farm_id, batch_id, status, due_at, id);

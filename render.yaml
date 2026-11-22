@@ -14,6 +14,9 @@ services:
         value: never
       - key: SPRING_FLYWAY_ENABLED
         value: "false"
+      # Existing Supabase target upgraded and verified through V33 on 2026-11-22.
+      - key: APP_COMMAND_RECEIPTS_ENABLED
+        value: "true"
       - key: SPRING_DATASOURCE_URL
         sync: false
       - key: SPRING_DATASOURCE_USERNAME

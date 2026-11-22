@@ -75,7 +75,7 @@ public class OfflineBootstrapController {
         List<TaskResponse> tasks = taskService.offlineTasks(farmId, principal.getId(), manager);
         List<FarmProductResponse> products = inventoryService.listProducts(farmId, false).stream()
                 .map(product -> product.forRole(principal.getUser().getRole())).toList();
-        List<BatchDashboardResponse> dashboard = dashboardService.listForFarm(farmId);
+        List<BatchDashboardResponse> dashboard = dashboardService.listForFarm(farmId, principal.getUser().getRole());
         return new OfflineBootstrapResponse(farmId, principal.getId(), principal.getUser().getRole().name(),
                 Instant.now(), batches, dashboard, products, tasks, plans, overviews, events, inputs);
     }

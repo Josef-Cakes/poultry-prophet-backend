@@ -96,6 +96,7 @@ class BatchComparisonServiceTest {
 
         var corruptRow = result.batches().stream().filter(row -> row.batchId().equals(1L)).findFirst().orElseThrow();
         assertThat(corruptRow.populationAtWindowEnd()).isNull();
+        assertThat(corruptRow.healthRelatedLossRatePercent()).isNull();
         assertThat(corruptRow.windowEnd()).isEqualTo(expectedEnd);
         assertThat(corruptRow.populationStatus()).isEqualTo("RECONCILIATION_REQUIRED");
         assertThat(corruptRow.populationWarning()).contains("outside the valid range");

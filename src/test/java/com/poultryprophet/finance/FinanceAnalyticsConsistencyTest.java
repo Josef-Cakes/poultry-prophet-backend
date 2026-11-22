@@ -18,6 +18,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Set;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -32,6 +33,26 @@ class FinanceAnalyticsConsistencyTest {
     @Mock private InventoryMovementRepository inventoryMovementRepository;
 
     private FinanceService service;
+
+    @Test
+    void identifiesOnlyPostedMarkedDemoTransactionsPerCurrencyWithoutChangingTotals() {
+        var demo = transaction(1L, FinanceTransactionType.EXPENSE, "Feed", "3250", "INVENTORY_PURCHASE", FinanceTransactionStatus.POSTED);
+        demo.setDescription("DEMO / TEST DATA; simulated purchase, not physical stock.");
+        var ordinary = transaction(2L, FinanceTransactionType.EXPENSE, "Feed", "50", "INVENTORY_PURCHASE", FinanceTransactionStatus.POSTED);
+        var voided = transaction(3L, FinanceTransactionType.EXPENSE, "Feed", "900", "INVENTORY_PURCHASE", FinanceTransactionStatus.VOIDED);
+        voided.setDescription("DEMO / TEST DATA; simulated purchase.");
+        var usd = transaction(4L, FinanceTransactionType.INCOME, "Sale", "20", "MANUAL", FinanceTransactionStatus.POSTED);
+        usd.setCurrency("USD");
+        when(repository.findAll(any(Specification.class), any(Sort.class))).thenReturn(List.of(demo, ordinary, voided, usd));
+
+        var result = service.analytics(42L, null, LocalDate.of(2026, 10, 1), LocalDate.of(2026, 10, 24));
+        var php = result.byCurrency().get(0);
+        var phpJson = new ObjectMapper().findAndRegisterModules().valueToTree(php);
+        assertThat(php.totals().recordedExpense()).isEqualByComparingTo("3300");
+        assertThat(phpJson.path("demoTransactionCount").asLong()).isEqualTo(1);
+        assertThat(phpJson.path("demoExpenseAmount").decimalValue()).isEqualByComparingTo("3250");
+        assertThat(new ObjectMapper().findAndRegisterModules().valueToTree(result.byCurrency().get(1)).path("demoTransactionCount").asLong()).isZero();
+    }
 
     @BeforeEach
     void setUp() {

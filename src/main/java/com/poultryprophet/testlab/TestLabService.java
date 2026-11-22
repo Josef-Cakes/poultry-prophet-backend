@@ -116,6 +116,7 @@ public class TestLabService {
         LocalDate startDate = today.minusDays(DAYS);
         LocalDate endDate = startDate.plusDays(DAYS - 1L);
         String runId = "100d-" + today.format(DateTimeFormatter.BASIC_ISO_DATE)
+                + "-farm" + farmId + "-source" + source.id()
                 + "-" + seed + "-" + profile.name().toLowerCase();
 
         List<Long> handlerIds = resolveHandlers(source, farmId);
@@ -144,7 +145,11 @@ public class TestLabService {
                             "Synthetic Test Lab event; not a production farm record.",
                             "SYNTHETIC_VALIDATION:" + runId,
                             stableUuid(runId + ":event:" + item.day() + ":" + item.type()),
-                            item.populationDelta()));
+                            item.populationDelta(), null, instant(day(startDate, item.day())),
+                            item.type() == EventType.SALE
+                                    ? new CreateBatchEventRequest.SaleDetails(new java.math.BigDecimal("400.00"), "PHP",
+                                            "Synthetic buyer", "Synthetic Test Lab sale")
+                                    : null));
         }
 
         List<Integer> observationDays = profile == TestLabProfile.DAILY_COVERAGE || profile == TestLabProfile.ANALYTICS_PACK

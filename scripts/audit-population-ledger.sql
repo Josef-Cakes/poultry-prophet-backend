@@ -41,7 +41,14 @@ WITH ordered_events AS (
                    PARTITION BY batch_id
                    ORDER BY event_date ASC NULLS LAST, created_at ASC NULLS LAST, event_id ASC
                    ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-               ) AS running_population
+               ) AS running_population,
+           initial_population::bigint
+               + SUM(CASE WHEN event_type = 'TRANSFER_IN' AND signed_delta > 0
+                          THEN signed_delta ELSE 0 END) OVER (
+                   PARTITION BY batch_id
+                   ORDER BY event_date ASC NULLS LAST, created_at ASC NULLS LAST, event_id ASC
+                   ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+               ) AS allowed_maximum
     FROM ordered_events
 )
 SELECT batch_id,
@@ -61,13 +68,13 @@ SELECT batch_id,
        CASE
            WHEN ledger_status <> 'OK' THEN 'INVALID_EVENT'
            WHEN running_population < 0 THEN 'BELOW_ZERO'
-           WHEN running_population > initial_population THEN 'ABOVE_INITIAL'
+           WHEN running_population > allowed_maximum THEN 'ABOVE_INITIAL'
            ELSE NULL
        END AS issue_code
 FROM replay
 WHERE ledger_status <> 'OK'
    OR running_population < 0
-   OR running_population > initial_population
+   OR running_population > allowed_maximum
 ORDER BY batch_id, event_date, created_at, event_id;
 
 WITH ordered_events AS (
@@ -78,6 +85,7 @@ WITH ordered_events AS (
            e.id AS event_id,
            e.event_date,
            e.created_at,
+           e.event_type,
            CASE
                WHEN e.population_delta IS NOT NULL THEN e.population_delta::bigint
                WHEN e.event_type IN ('MORTALITY', 'HEALTH_DEATH', 'ACCIDENTAL_DEATH',
@@ -97,10 +105,17 @@ WITH ordered_events AS (
                    PARTITION BY batch_id
                    ORDER BY event_date ASC NULLS LAST, created_at ASC NULLS LAST, event_id ASC
                    ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-               ), 0) AS running_population
+               ), 0) AS running_population,
+           initial_population::bigint
+               + COALESCE(SUM(CASE WHEN event_type = 'TRANSFER_IN' AND signed_delta > 0
+                                   THEN signed_delta ELSE 0 END) OVER (
+                   PARTITION BY batch_id
+                   ORDER BY event_date ASC NULLS LAST, created_at ASC NULLS LAST, event_id ASC
+                   ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+               ), 0) AS allowed_maximum
     FROM ordered_events
 ), latest AS (
-    SELECT DISTINCT ON (batch_id) batch_id, running_population
+    SELECT DISTINCT ON (batch_id) batch_id, running_population, allowed_maximum
     FROM replay
     ORDER BY batch_id, event_date DESC NULLS LAST, created_at DESC NULLS LAST, event_id DESC NULLS LAST
 )
@@ -110,10 +125,10 @@ SELECT b.id AS batch_id,
        b.current_population AS stored_current_population,
        COALESCE(latest.running_population, b.initial_population) AS replayed_population,
        CASE
-           WHEN b.current_population < 0 OR b.current_population > b.initial_population
+           WHEN b.current_population < 0 OR b.current_population > COALESCE(latest.allowed_maximum, b.initial_population)
                THEN 'STORED_COUNT_OUT_OF_RANGE'
            WHEN COALESCE(latest.running_population, b.initial_population) < 0
-                OR COALESCE(latest.running_population, b.initial_population) > b.initial_population
+                OR COALESCE(latest.running_population, b.initial_population) > COALESCE(latest.allowed_maximum, b.initial_population)
                THEN 'EVENT_PROJECTION_OUT_OF_RANGE'
            WHEN b.current_population <> COALESCE(latest.running_population, b.initial_population)
                THEN 'STORED_COUNT_MISMATCH'
@@ -122,8 +137,8 @@ SELECT b.id AS batch_id,
 FROM batch b
 LEFT JOIN latest ON latest.batch_id = b.id
 WHERE b.current_population < 0
-   OR b.current_population > b.initial_population
+   OR b.current_population > COALESCE(latest.allowed_maximum, b.initial_population)
    OR COALESCE(latest.running_population, b.initial_population) < 0
-   OR COALESCE(latest.running_population, b.initial_population) > b.initial_population
+   OR COALESCE(latest.running_population, b.initial_population) > COALESCE(latest.allowed_maximum, b.initial_population)
    OR b.current_population <> COALESCE(latest.running_population, b.initial_population)
 ORDER BY b.id;

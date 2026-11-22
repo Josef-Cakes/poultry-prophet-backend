@@ -95,6 +95,12 @@ public class BatchService {
         if (request.farmEntryDate().isBefore(request.hatchDate())) {
             throw new BadRequestException("Farm entry date cannot be before the hatch date");
         }
+        if (request.bloodline() == null || request.bloodline().isBlank()) {
+            throw new BadRequestException("Bloodline is required");
+        }
+        if (request.bloodline().trim().length() > 255) {
+            throw new BadRequestException("Bloodline must be 255 characters or fewer");
+        }
         if (batchRepository.existsByFarmIdAndNameIgnoreCase(farmId, request.name())) {
             throw new BadRequestException("A batch named '" + request.name() + "' already exists on this farm");
         }
@@ -109,7 +115,8 @@ public class BatchService {
         batch.setStartDate(request.startDate() == null ? request.farmEntryDate() : request.startDate());
         batch.setHatchDate(request.hatchDate());
         batch.setFarmEntryDate(request.farmEntryDate());
-        batch.setBloodline(request.bloodline());
+        batch.setBloodline(request.bloodline().trim());
+        batch.setDerbyDate(request.derbyDate());
         batch.setSource(request.source());
         // Stage is auto-derived from age (the start/hatch date drives it); a manager can pin a
         // manual override later. This also handles registering older birds via a past start date.
@@ -150,6 +157,13 @@ public class BatchService {
     @Transactional(readOnly = true)
     public BatchResponse getForFarm(Long batchId, Long farmId) {
         return responseFor(requireBatch(batchId, farmId));
+    }
+
+    @Transactional
+    public BatchResponse updateDerbyDate(Long batchId, Long farmId, LocalDate derbyDate) {
+        Batch batch = requireWritableBatch(batchId, farmId);
+        batch.setDerbyDate(derbyDate);
+        return responseFor(batchRepository.save(batch));
     }
 
     @Transactional

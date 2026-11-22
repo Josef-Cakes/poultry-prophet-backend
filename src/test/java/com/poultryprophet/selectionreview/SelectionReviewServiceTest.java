@@ -12,6 +12,11 @@ import com.poultryprophet.event.EventType;
 import com.poultryprophet.finance.FinancialTransactionRepository;
 import com.poultryprophet.incubation.IncubationCycleRepository;
 import com.poultryprophet.input.FarmInputLogRepository;
+import com.poultryprophet.input.FarmInputLog;
+import com.poultryprophet.input.InputProductType;
+import com.poultryprophet.inventory.InventoryMovement;
+import com.poultryprophet.inventory.InventoryMovementRepository;
+import com.poultryprophet.inventory.InventoryMovementType;
 import com.poultryprophet.population.PopulationProjectionService;
 import com.poultryprophet.sexcomposition.BatchSexComposition;
 import com.poultryprophet.sexcomposition.BatchSexCompositionRepository;
@@ -22,12 +27,16 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.time.Instant;
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
 
@@ -40,6 +49,150 @@ class SelectionReviewServiceTest {
     @Mock private FinancialTransactionRepository financeRepository;
     @Mock private BatchService batchService;
     @Mock private BatchSexCompositionRepository sexCompositionRepository;
+    @Mock private InventoryMovementRepository inventoryMovementRepository;
+
+    @Test
+    void hidesProductCostsFromHandlerInLiveAndSavedReviewsEvenWithoutFinanceSection() throws Exception {
+        LocalDate date = LocalDate.of(2026, 10, 9);
+        Batch batch = new Batch();
+        batch.setId(7L); batch.setFarmId(3L); batch.setName("Batch");
+        batch.setInitialPopulation(100); batch.setCurrentPopulation(100); batch.setStartDate(date);
+        when(batchService.requireBatch(7L, 3L)).thenReturn(batch);
+        when(batchService.resolveStage(batch)).thenReturn(new BatchService.StageView(new LifecycleStage("brooding", 0), true));
+        FarmInputLog input = new FarmInputLog();
+        input.setId(55L); input.setRecordedAt(Instant.parse("2026-10-09T03:00:00Z"));
+        input.setProductType(InputProductType.FEED); input.setBrandName("Feed");
+        input.setQuantity(new BigDecimal("3")); input.setUnit("kg");
+        InventoryMovement movement = new InventoryMovement();
+        movement.setMovementType(InventoryMovementType.USAGE); movement.setFarmInputLogId(55L); movement.setUnitCostSnapshot(new BigDecimal("50"));
+        movement.setInventoryValueDelta(new BigDecimal("-150"));
+        when(inputRepository.findByFarmIdAndBatchIdAndRecordedAtGreaterThanEqualAndRecordedAtLessThanOrderByRecordedAtDesc(eq(3L), eq(7L), any(), any())).thenReturn(List.of(input));
+        when(inventoryMovementRepository.findByFarmIdAndBatchIdAndOccurredAtBetweenOrderByOccurredAtAsc(eq(3L), eq(7L), any(), any())).thenReturn(List.of(movement));
+        ObjectMapper mapper = new ObjectMapper().registerModule(new JavaTimeModule());
+        SelectionReviewService service = new SelectionReviewService(reviewRepository, eventRepository, inputRepository,
+                incubationRepository, financeRepository, batchService, mapper, null, new PopulationProjectionService(),
+                null, null, inventoryMovementRepository);
+
+        SelectionReviewPayload handler = service.preview(7L, 3L, date, date, date, false);
+        assertThat(handler.batch().ageDays()).isZero();
+        assertThat(handler.productUse()).hasSize(1);
+        assertThat(handler.productUse().get(0).quantity()).isEqualByComparingTo("3");
+        assertThat(handler.productUse().get(0).unitCost()).isNull();
+        assertThat(handler.productUse().get(0).calculatedCost()).isNull();
+        assertThat(handler.productUse().get(0).costStatus()).isNull();
+        SelectionReviewPayload manager = service.preview(7L, 3L, date, date, date, true);
+        assertThat(manager.productUse().get(0).unitCost()).isEqualByComparingTo("50");
+        assertThat(manager.productUse().get(0).calculatedCost()).isEqualByComparingTo("150");
+
+        var json = mapper.valueToTree(handler);
+        var item = (com.fasterxml.jackson.databind.node.ObjectNode) json.path("productUse").get(0);
+        item.put("unitCost", 50); item.put("calculatedCost", 150); item.put("costStatus", "VALUED");
+        BatchSelectionReview review = new BatchSelectionReview();
+        review.setId(44L); review.setFarmId(3L); review.setBatchId(7L); review.setPayloadJson(mapper.writeValueAsString(json));
+        when(reviewRepository.findByIdAndFarmIdAndBatchId(44L, 3L, 7L)).thenReturn(Optional.of(review));
+        SelectionReviewPayload saved = service.get(7L, 3L, 44L, false).payload();
+        assertThat(saved.productUse().get(0).unitCost()).isNull();
+        assertThat(saved.productUse().get(0).calculatedCost()).isNull();
+        assertThat(saved.productUse().get(0).costStatus()).isNull();
+    }
+
+    @Test
+    void marksMissingProductUseCostsPartialWithoutDoubleCountingAndKeepsKnownSubtotal() {
+        LocalDate date = LocalDate.of(2026, 10, 9);
+        Batch batch = new Batch();
+        batch.setId(7L); batch.setFarmId(3L); batch.setName("Batch");
+        batch.setInitialPopulation(100); batch.setCurrentPopulation(100); batch.setStartDate(date);
+        when(batchService.requireBatch(7L, 3L)).thenReturn(batch);
+        when(batchService.resolveStage(batch)).thenReturn(new BatchService.StageView(new LifecycleStage("brooding", 0), true));
+        FarmInputLog valued = costInput(1L, new BigDecimal("70"));
+        FarmInputLog missingMovement = costInput(2L, null);
+        FarmInputLog unvaluedMovement = costInput(3L, null);
+        FarmInputLog free = costInput(4L, BigDecimal.ONE);
+        FarmInputLog missingQuantity = costInput(5L, null);
+        when(inputRepository.findByFarmIdAndBatchIdAndRecordedAtGreaterThanEqualAndRecordedAtLessThanOrderByRecordedAtDesc(eq(3L), eq(7L), any(), any()))
+                .thenReturn(List.of(valued, missingMovement, unvaluedMovement, free, missingQuantity));
+        InventoryMovement known = costMovement(1L, "-1890");
+        InventoryMovement unknown = costMovement(3L, null);
+        InventoryMovement freeMovement = costMovement(4L, "0");
+        InventoryMovement quantityUnknown = costMovement(5L, "0");
+        InventoryMovement unrelated = costMovement(2L, "-500");
+        unrelated.setMovementType(InventoryMovementType.STOCK_IN);
+        when(inventoryMovementRepository.findByFarmIdAndBatchIdAndOccurredAtBetweenOrderByOccurredAtAsc(eq(3L), eq(7L), any(), any()))
+                .thenReturn(List.of(known, unknown, freeMovement, quantityUnknown, unrelated));
+        SelectionReviewService service = new SelectionReviewService(reviewRepository, eventRepository, inputRepository,
+                incubationRepository, financeRepository, batchService, new ObjectMapper().registerModule(new JavaTimeModule()),
+                null, new PopulationProjectionService(), null, null, inventoryMovementRepository);
+
+        var report = service.preview(7L, 3L, date, date, date, true);
+        assertThat(report.productUse()).filteredOn(item -> item.sourceId().equals(2L))
+                .singleElement().satisfies(item -> assertThat(item.calculatedCost()).isNull());
+        var finance = report.finance();
+        assertThat(finance.totalRecordedBatchCost()).isEqualByComparingTo("1890");
+        assertThat(finance.recordsMayBeIncomplete()).isTrue();
+        assertThat(finance.unvaluedUsageCount()).isEqualTo(3);
+        assertThat(finance.currencyTotals()).singleElement().satisfies(total -> {
+            assertThat(total.currency()).isEqualTo("PHP");
+            assertThat(total.recordsMayBeIncomplete()).isTrue();
+            assertThat(total.totalRecordedBatchCost()).isEqualByComparingTo("1890");
+        });
+    }
+
+    private static FarmInputLog costInput(long id, BigDecimal quantity) {
+        FarmInputLog input = new FarmInputLog(); input.setId(id);
+        input.setRecordedAt(Instant.parse("2026-10-09T03:00:00Z"));
+        input.setProductType(InputProductType.FEED); input.setBrandName("Feed");
+        input.setQuantity(quantity); input.setUnit("pack"); return input;
+    }
+
+    private static InventoryMovement costMovement(long inputId, String cost) {
+        InventoryMovement movement = new InventoryMovement();
+        movement.setMovementType(InventoryMovementType.USAGE); movement.setFarmInputLogId(inputId);
+        movement.setInventoryValueDelta(cost == null ? null : new BigDecimal(cost)); return movement;
+    }
+
+    @Test
+    void requiresAConcreteManagerDecisionBeforeFinalizingAReport() {
+        Batch batch = new Batch();
+        batch.setId(7L);
+        batch.setFarmId(3L);
+        batch.setStartDate(LocalDate.of(2026, 9, 1));
+        BatchSelectionReview review = new BatchSelectionReview();
+        review.setId(44L);
+        review.setFarmId(3L);
+        review.setBatchId(7L);
+        review.setStatus(SelectionReviewStatus.DRAFT);
+        review.setAsOfDate(LocalDate.of(2026, 9, 20));
+        when(batchService.requireBatchForUpdate(7L, 3L)).thenReturn(batch);
+        when(reviewRepository.findByIdAndFarmIdAndBatchId(44L, 3L, 7L)).thenReturn(Optional.of(review));
+
+        SelectionReviewService service = new SelectionReviewService(reviewRepository, eventRepository,
+                inputRepository, incubationRepository, financeRepository, batchService,
+                new ObjectMapper().registerModule(new JavaTimeModule()));
+
+        assertThatThrownBy(() -> service.finalize(7L, 3L, 44L, 11L,
+                new FinalizeSelectionReviewRequest(ManagerReviewStatus.NOT_REVIEWED, null, null)))
+                .isInstanceOf(com.poultryprophet.common.BadRequestException.class)
+                .hasMessageContaining("Choose a review decision");
+        verify(reviewRepository, never()).save(any());
+    }
+
+    @Test
+    void rejectsFollowUpDatesBeforeTodayEvenWhenAfterTheReportDate() {
+        LocalDate today = LocalDate.now(ZoneId.of("Asia/Manila"));
+        Batch batch = new Batch(); batch.setId(7L); batch.setFarmId(3L); batch.setStartDate(today.minusDays(10));
+        BatchSelectionReview review = new BatchSelectionReview();
+        review.setId(44L); review.setFarmId(3L); review.setBatchId(7L);
+        review.setStatus(SelectionReviewStatus.DRAFT); review.setAsOfDate(today.minusDays(3));
+        when(batchService.requireBatchForUpdate(7L, 3L)).thenReturn(batch);
+        when(reviewRepository.findByIdAndFarmIdAndBatchId(44L, 3L, 7L)).thenReturn(Optional.of(review));
+        SelectionReviewService service = new SelectionReviewService(reviewRepository, eventRepository,
+                inputRepository, incubationRepository, financeRepository, batchService,
+                new ObjectMapper().registerModule(new JavaTimeModule()));
+        assertThatThrownBy(() -> service.finalize(7L, 3L, 44L, 11L,
+                new FinalizeSelectionReviewRequest(ManagerReviewStatus.CONTINUE_OBSERVATION, null, today.minusDays(1))))
+                .isInstanceOf(com.poultryprophet.common.BadRequestException.class).hasMessageContaining("today or later");
+        verify(reviewRepository, never()).save(any());
+    }
 
     @Test
     void keepsPopulationCausesSeparateAndDoesNotExposeFinanceToHandler() {
@@ -77,6 +230,7 @@ class SelectionReviewServiceTest {
                 java.time.Instant.parse("2026-09-20T16:00:00Z"));
 
         assertThat(payload.population().healthRelatedDeaths()).isEqualTo(2);
+        assertThat(payload.batch().ageDays()).isEqualTo(19);
         assertThat(payload.population().totalDeaths()).isEqualTo(2);
         assertThat(payload.population().predation()).isEqualTo(3);
         assertThat(payload.population().missing()).isEqualTo(1);
@@ -88,6 +242,29 @@ class SelectionReviewServiceTest {
         assertThat(payload.finance()).isNull();
         assertThat(payload.dataAvailability()).anyMatch(value -> value.section().equals("Population events")
                 && value.recordCount() == 5);
+    }
+
+    @Test
+    void preservesLegitimateTransferredPopulationInLiveAndSavedReports() throws Exception {
+        LocalDate start = LocalDate.of(2026, 9, 1), end = LocalDate.of(2026, 9, 20);
+        Batch batch = new Batch(); batch.setId(7L); batch.setFarmId(3L); batch.setName("Flock");
+        batch.setStartDate(start); batch.setInitialPopulation(10); batch.setCurrentPopulation(11);
+        when(batchService.requireBatch(7L, 3L)).thenReturn(batch);
+        when(batchService.resolveStage(batch)).thenReturn(new BatchService.StageView(new LifecycleStage("brooding", 0), true));
+        when(eventRepository.findByBatchIdAndEventDateBetweenOrderByEventDateAscCreatedAtAsc(7L, start, end))
+                .thenReturn(List.of(event(EventType.TRANSFER_IN, 1, 1)));
+        ObjectMapper mapper = new ObjectMapper().registerModule(new JavaTimeModule());
+        SelectionReviewService service = new SelectionReviewService(reviewRepository, eventRepository,
+                inputRepository, incubationRepository, financeRepository, batchService, mapper);
+        SelectionReviewPayload live = service.preview(7L, 3L, start, end, end, false);
+        assertThat(live.population().currentPopulation()).isEqualTo(11);
+        assertThat(live.population().reconciliationRequired()).isFalse();
+        BatchSelectionReview saved = new BatchSelectionReview();
+        saved.setId(44L); saved.setFarmId(3L); saved.setBatchId(7L); saved.setPayloadJson(mapper.writeValueAsString(live));
+        when(reviewRepository.findByIdAndFarmIdAndBatchId(44L, 3L, 7L)).thenReturn(Optional.of(saved));
+        SelectionReviewPayload loaded = service.get(7L, 3L, 44L, false).payload();
+        assertThat(loaded.population().currentPopulation()).isEqualTo(11);
+        assertThat(loaded.population().reconciliationRequired()).isFalse();
     }
 
     @Test

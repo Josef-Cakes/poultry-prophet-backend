@@ -37,6 +37,13 @@ public class BatchSelectionSession {
     @Column(name = "batch_id", nullable = false)
     private Long batchId;
 
+    /** Finalized report snapshot used as the evidence basis. Null is retained for legacy records. */
+    @Column(name = "selection_review_id")
+    private Long selectionReviewId;
+
+    @Column(name = "source_data_acknowledged", nullable = false)
+    private boolean sourceDataAcknowledged;
+
     @Column(name = "selection_date", nullable = false)
     private LocalDate selectionDate;
 
@@ -99,6 +106,10 @@ public class BatchSelectionSession {
     public void setFarmId(Long farmId) { this.farmId = farmId; }
     public Long getBatchId() { return batchId; }
     public void setBatchId(Long batchId) { this.batchId = batchId; }
+    public Long getSelectionReviewId() { return selectionReviewId; }
+    public void setSelectionReviewId(Long selectionReviewId) { this.selectionReviewId = selectionReviewId; }
+    public boolean isSourceDataAcknowledged() { return sourceDataAcknowledged; }
+    public void setSourceDataAcknowledged(boolean sourceDataAcknowledged) { this.sourceDataAcknowledged = sourceDataAcknowledged; }
     public LocalDate getSelectionDate() { return selectionDate; }
     public void setSelectionDate(LocalDate selectionDate) { this.selectionDate = selectionDate; }
     public Long getReviewerId() { return reviewerId; }

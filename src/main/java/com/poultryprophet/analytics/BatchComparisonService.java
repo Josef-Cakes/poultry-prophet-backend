@@ -129,7 +129,7 @@ public class BatchComparisonService {
         if (productRecords.isEmpty()) limitations.add("No product-use records for this common window.");
         if (selection == null) limitations.add("No finalized selection session in this common window.");
         if (projection.reconciliationRequired()) limitations.add(projection.reconciliationMessage());
-        Double lossRate = batch.getInitialPopulation() == 0 ? null
+        Double lossRate = projection.reconciliationRequired() || batch.getInitialPopulation() <= 0 ? null
                 : round(healthDeaths * 100.0 / batch.getInitialPopulation());
         return new BatchComparisonResponse.BatchComparisonRow(
                 batch.getId(), batch.getName(), batch.getBloodline(), batch.getSource(), batch.getHatchDate(), end,

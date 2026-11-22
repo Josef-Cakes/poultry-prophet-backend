@@ -19,7 +19,12 @@ public record FinanceAnalyticsResponse(
         List<CurrencyReport> byCurrency
 ) {
     public record CurrencyReport(String currency, Totals totals, List<SeriesPoint> series,
-                                 List<CategoryTotal> categoryTotals) {}
+                                 List<CategoryTotal> categoryTotals, long demoTransactionCount,
+                                 BigDecimal demoExpenseAmount, BigDecimal demoIncomeAmount) {
+        public CurrencyReport(String currency, Totals totals, List<SeriesPoint> series, List<CategoryTotal> categoryTotals) {
+            this(currency, totals, series, categoryTotals, 0, BigDecimal.ZERO, BigDecimal.ZERO);
+        }
+    }
 
     public record Totals(
             BigDecimal recordedIncome,

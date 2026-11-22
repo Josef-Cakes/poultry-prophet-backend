@@ -23,11 +23,10 @@ class SelectionReviewCurrencyTest {
                         tx("USD", "5", FinanceTransactionType.EXPENSE, null, FinanceTransactionStatus.POSTED),
                         tx("USD", "999", FinanceTransactionType.INCOME, null, FinanceTransactionStatus.VOIDED)));
         var usage = new InventoryMovement(); usage.setMovementType(InventoryMovementType.USAGE); usage.setInventoryValueDelta(new BigDecimal("-20"));
-        when(inventory.findByFarmIdAndBatchIdAndOccurredAtBetweenOrderByOccurredAtAsc(eq(1L), eq(2L), any(), any())).thenReturn(List.of(usage));
         var service = new SelectionReviewService(null, null, null, null, finance, null, new ObjectMapper(), null, null, null, null, inventory);
-        var method = SelectionReviewService.class.getDeclaredMethod("financeSummary", Long.class, Long.class, LocalDate.class, LocalDate.class);
+        var method = SelectionReviewService.class.getDeclaredMethod("financeSummary", Long.class, Long.class, LocalDate.class, LocalDate.class, List.class, List.class);
         method.setAccessible(true);
-        var summary = (SelectionReviewPayload.FinanceSummary) method.invoke(service, 1L, 2L, START, END);
+        var summary = (SelectionReviewPayload.FinanceSummary) method.invoke(service, 1L, 2L, START, END, List.of(), List.of(usage));
         assertThat(summary.recordedIncome()).isNull();
         assertThat(summary.currencyTotals()).hasSize(2);
         var php = summary.currencyTotals().stream().filter(x -> x.currency().equals("PHP")).findFirst().orElseThrow();
@@ -44,9 +43,9 @@ class SelectionReviewCurrencyTest {
         when(finance.findByFarmIdAndBatchIdAndTransactionDateBetweenOrderByTransactionDateAsc(1L, 2L, START, END))
                 .thenReturn(List.of(tx("PHP", "100", FinanceTransactionType.INCOME, "SALE_EVENT", FinanceTransactionStatus.POSTED)));
         var service = new SelectionReviewService(null, null, null, null, finance, null, new ObjectMapper());
-        var method = SelectionReviewService.class.getDeclaredMethod("financeSummary", Long.class, Long.class, LocalDate.class, LocalDate.class);
+        var method = SelectionReviewService.class.getDeclaredMethod("financeSummary", Long.class, Long.class, LocalDate.class, LocalDate.class, List.class, List.class);
         method.setAccessible(true);
-        var summary = (SelectionReviewPayload.FinanceSummary) method.invoke(service, 1L, 2L, START, END);
+        var summary = (SelectionReviewPayload.FinanceSummary) method.invoke(service, 1L, 2L, START, END, List.of(), List.of());
         assertThat(summary.recordedIncome()).isEqualByComparingTo("100");
         assertThat(summary.currencyTotals()).hasSize(1);
         var historical = new ObjectMapper().readValue("{\"recordedIncome\":100,\"postedTransactionCount\":1}", SelectionReviewPayload.FinanceSummary.class);
@@ -60,9 +59,9 @@ class SelectionReviewCurrencyTest {
                         tx("USD", "10", FinanceTransactionType.EXPENSE, null, FinanceTransactionStatus.POSTED),
                         tx("USD", "50", FinanceTransactionType.EXPENSE, "INVENTORY_PURCHASE", FinanceTransactionStatus.POSTED)));
         var service = new SelectionReviewService(null, null, null, null, finance, null, new ObjectMapper());
-        var method = SelectionReviewService.class.getDeclaredMethod("financeSummary", Long.class, Long.class, LocalDate.class, LocalDate.class);
+        var method = SelectionReviewService.class.getDeclaredMethod("financeSummary", Long.class, Long.class, LocalDate.class, LocalDate.class, List.class, List.class);
         method.setAccessible(true);
-        var summary = (SelectionReviewPayload.FinanceSummary) method.invoke(service, 1L, 2L, START, END);
+        var summary = (SelectionReviewPayload.FinanceSummary) method.invoke(service, 1L, 2L, START, END, List.of(), List.of());
         assertThat(summary.recordedIncome()).isNull();
         assertThat(summary.currencyTotals()).hasSize(1);
         var usd = summary.currencyTotals().get(0);

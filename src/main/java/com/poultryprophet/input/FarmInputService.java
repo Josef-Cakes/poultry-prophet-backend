@@ -23,6 +23,7 @@ import org.springframework.data.jpa.domain.Specification;
 import jakarta.persistence.criteria.Predicate;
 
 import java.time.Instant;
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.UUID;
@@ -70,7 +71,7 @@ public class FarmInputService {
                     || request.productType() != existing.getProductType()
                     || !java.util.Objects.equals(request.brandName().trim(), existing.getBrandName())
                     || !java.util.Objects.equals(trimToNull(request.productName()), existing.getProductName())
-                    || !java.util.Objects.equals(request.quantity(), existing.getQuantity())
+                    || !sameQuantity(request.quantity(), existing.getQuantity())
                     || !java.util.Objects.equals(trimToNull(request.unit()), existing.getUnit())
                     || !java.util.Objects.equals(trimToNull(request.route()), existing.getRoute())
                     || !java.util.Objects.equals(trimToNull(request.purpose()), existing.getPurpose())
@@ -169,4 +170,9 @@ public class FarmInputService {
     private String trimToNull(String value) {
         return value == null || value.isBlank() ? null : value.trim();
     }
+    // PostgreSQL NUMERIC(14,3) changes representation (1 -> 1.000), not meaning.
+    private static boolean sameQuantity(BigDecimal requested, BigDecimal stored) {
+        return requested == null ? stored == null : stored != null && requested.compareTo(stored) == 0;
+    }
+
 }

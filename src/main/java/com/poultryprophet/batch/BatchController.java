@@ -7,6 +7,7 @@ import com.poultryprophet.batch.dto.BatchRetirementImpactResponse;
 import com.poultryprophet.batch.dto.CreateBatchRequest;
 import com.poultryprophet.batch.dto.ConfirmHatchDateRequest;
 import com.poultryprophet.batch.dto.DeleteBatchRequest;
+import com.poultryprophet.batch.dto.UpdateDerbyDateRequest;
 import com.poultryprophet.security.CustomUserDetails;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -24,6 +25,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/batches")
@@ -49,6 +51,12 @@ public class BatchController {
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
+    /** Allows newer clients to avoid silently losing fields against older backend builds. */
+    @GetMapping("/capabilities")
+    public Map<String, Boolean> capabilities() {
+        return Map.of("batchMetadata", true);
+    }
+
     @GetMapping
     public List<BatchResponse> list(@RequestParam(defaultValue = "false") boolean archived,
                                     @AuthenticationPrincipal CustomUserDetails principal) {
@@ -58,6 +66,14 @@ public class BatchController {
     @GetMapping("/{id}")
     public BatchResponse get(@PathVariable Long id, @AuthenticationPrincipal CustomUserDetails principal) {
         return batchService.getForFarm(id, principal.getFarmId());
+    }
+
+    @PatchMapping("/{id}/derby-date")
+    @PreAuthorize("hasAnyRole('MANAGER', 'HANDLER')")
+    public BatchResponse updateDerbyDate(@PathVariable Long id,
+                                         @RequestBody UpdateDerbyDateRequest request,
+                                         @AuthenticationPrincipal CustomUserDetails principal) {
+        return batchService.updateDerbyDate(id, principal.getFarmId(), request.derbyDate());
     }
 
     @GetMapping("/{id}/tracking")
@@ -73,11 +89,22 @@ public class BatchController {
         return batchService.confirmHatchDate(id, principal.getFarmId(), principal.getId(), request);
     }
 
+    @GetMapping("/{id}/population/diagnostics")
+    @PreAuthorize("hasRole('MANAGER')")
+    public BatchPopulationReconciliationService.PopulationDiagnostics populationDiagnostics(
+            @PathVariable Long id, @AuthenticationPrincipal CustomUserDetails principal) {
+        return populationReconciliationService.diagnostics(id, principal.getFarmId());
+    }
+
+    public record PopulationReconcileRequest(String expectedRevision) {}
+
     @PatchMapping("/{id}/population/reconcile")
     @PreAuthorize("hasRole('MANAGER')")
     public BatchResponse reconcilePopulation(@PathVariable Long id,
+                                             @RequestBody(required = false) PopulationReconcileRequest request,
                                              @AuthenticationPrincipal CustomUserDetails principal) {
-        return populationReconciliationService.reconcile(id, principal.getFarmId(), principal.getId());
+        return populationReconciliationService.reconcile(id, principal.getFarmId(), principal.getId(),
+                request == null ? null : request.expectedRevision());
     }
 
     @GetMapping("/{id}/retirement-impact")

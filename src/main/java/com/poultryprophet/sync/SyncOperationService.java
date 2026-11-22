@@ -69,6 +69,9 @@ public class SyncOperationService {
     private final TransactionTemplate transactionTemplate;
     private final DailyRecordService dailyRecordService;
     private final JdbcTemplate jdbcTemplate;
+    private final com.poultryprophet.selectionsession.SelectionSessionCommandService selectionCommands;
+    private final CommandReceiptService commandReceipts;
+    private final RemainingCommandService remainingCommands;
 
     @Autowired
     public SyncOperationService(ObjectMapper objectMapper, BatchEventService eventService,
@@ -82,7 +85,9 @@ public class SyncOperationService {
                                 TaskService taskService,
                                 OfflineSyncReceiptRepository receiptRepository,
                                 Clock clock, PlatformTransactionManager transactionManager,
-                                DailyRecordService dailyRecordService, JdbcTemplate jdbcTemplate) {
+                                DailyRecordService dailyRecordService, JdbcTemplate jdbcTemplate,
+                                com.poultryprophet.selectionsession.SelectionSessionCommandService selectionCommands,
+                                CommandReceiptService commandReceipts, RemainingCommandService remainingCommands) {
         this.objectMapper = objectMapper;
         this.eventService = eventService;
         this.inputService = inputService;
@@ -99,6 +104,9 @@ public class SyncOperationService {
         this.transactionTemplate = transactionManager == null ? null : new TransactionTemplate(transactionManager);
         this.dailyRecordService = dailyRecordService;
         this.jdbcTemplate = jdbcTemplate;
+        this.selectionCommands = selectionCommands;
+        this.commandReceipts = commandReceipts;
+        this.remainingCommands = remainingCommands;
     }
 
     /** Compatibility constructor for focused sync tests that do not exercise sex or vaccination replay. */
@@ -110,7 +118,7 @@ public class SyncOperationService {
                                 Validator validator) {
         this(objectMapper, eventService, inputService, eventRepository, inputRepository,
                 selectionSessionService, selectionSessionRepository, validator, null, null, null, null,
-                Clock.system(ZoneId.of("Asia/Manila")), null, null, null);
+                Clock.system(ZoneId.of("Asia/Manila")), null, null, null, null, null, null);
     }
 
     public SyncOperationsResponse sync(SyncOperationsRequest request, Long farmId, Long userId, Role role) {
@@ -132,6 +140,10 @@ public class SyncOperationService {
                         : transactionTemplate.execute(status -> apply(operation, farmId, userId, role));
                 results.add(java.util.Objects.requireNonNull(result));
                 applied++;
+            } catch (CommandReceiptsUnavailableException ex) {
+                blockedBatches.add(operation.batchId());
+                results.add(SyncOperationResult.retryable(operation.operationId(), ex.getMessage()));
+                retryable++;
             } catch (ConflictException ex) {
                 blockedBatches.add(operation.batchId());
                 results.add(SyncOperationResult.conflict(operation.operationId(), ex.getMessage()));
@@ -155,48 +167,19 @@ public class SyncOperationService {
             throw new BadRequestException("Unsupported offline operation schema version: " + operation.schemaVersion());
         }
         return switch (operation.entityType()) {
-            case "DAILY_RECORD" -> applyDailyRecord(operation, farmId, userId);
+            case "DAILY_RECORD" -> dailyCommand(operation, farmId, userId);
             case "BATCH_EVENT" -> {
                 CreateBatchEventRequest payload = readPayload(operation, CreateBatchEventRequest.class, "batch event");
-                if (payload.eventDate() == null) {
-                    payload = new CreateBatchEventRequest(
-                            operation.occurredAt().atZone(clock.getZone()).toLocalDate(),
-                            payload.eventType(), payload.title(), payload.severityLabel(), payload.affectedCount(),
-                            payload.details(), payload.tags(), payload.operationId(), payload.populationDelta(),
-                            payload.sexAllocation(), payload.occurredAt() == null ? operation.occurredAt() : payload.occurredAt(),
-                            payload.saleDetails());
-                }
                 validatePayload(payload, "batch event");
-                if (!operation.operationId().equals(payload.operationId())) {
-                    throw new BadRequestException("The operation ID does not match the event payload");
-                }
-                boolean alreadyApplied = eventRepository.findByOperationId(operation.operationId()).isPresent();
-                BatchEventResponse saved = eventService.create(operation.batchId(), farmId, userId, payload);
-                yield alreadyApplied
-                        ? SyncOperationResult.alreadyApplied(operation.operationId(), saved.id())
-                        : SyncOperationResult.applied(operation.operationId(), saved.id());
+                if (!operation.operationId().equals(payload.operationId())) throw new BadRequestException("The operation ID does not match the event payload");
+                yield remainingCommands.event(operation.batchId(),farmId,userId,payload,operation.occurredAt()).acknowledgement();
             }
             case "FARM_INPUT" -> {
-                CreateFarmInputRequest payload = readPayload(operation, CreateFarmInputRequest.class, "farm input");
-                if (payload.recordedAt() == null) {
-                    payload = new CreateFarmInputRequest(
-                            payload.batchId(), payload.incubationCycleId(), operation.occurredAt(),
-                            payload.productType(), payload.brandName(), payload.productName(), payload.quantity(),
-                            payload.unit(), payload.route(), payload.purpose(), payload.notes(), payload.operationId(),
-                            payload.farmProductId(), payload.affectedBirdCount());
-                }
-                validatePayload(payload, "farm input");
-                if (!operation.operationId().equals(payload.operationId())) {
-                    throw new BadRequestException("The operation ID does not match the input payload");
-                }
-                if (!operation.batchId().equals(payload.batchId())) {
-                    throw new BadRequestException("The operation batch does not match the input payload");
-                }
-                boolean alreadyApplied = inputRepository.findByOperationId(operation.operationId()).isPresent();
-                FarmInputLogResponse saved = inputService.create(farmId, userId, role, payload);
-                yield alreadyApplied
-                        ? SyncOperationResult.alreadyApplied(operation.operationId(), saved.id())
-                        : SyncOperationResult.applied(operation.operationId(), saved.id());
+                CreateFarmInputRequest payload=readPayload(operation,CreateFarmInputRequest.class,"farm input");
+                validatePayload(payload,"farm input");
+                if(!operation.operationId().equals(payload.operationId())) throw new BadRequestException("The operation ID does not match the input payload");
+                if(!operation.batchId().equals(payload.batchId())) throw new BadRequestException("The operation batch does not match the input payload");
+                yield remainingCommands.input(farmId,userId,role,payload,operation.occurredAt()).acknowledgement();
             }
             case "SELECTION_SESSION" -> {
                 requireManager(role);
@@ -205,12 +188,7 @@ public class SyncOperationService {
                 if (!operation.operationId().equals(payload.operationId())) {
                     throw new BadRequestException("The operation ID does not match the selection session payload");
                 }
-                boolean alreadyApplied = selectionSessionRepository.findByOperationId(operation.operationId()).isPresent();
-                SelectionSessionResponse saved = selectionSessionService.create(
-                        operation.batchId(), farmId, userId, payload, null);
-                yield alreadyApplied
-                        ? SyncOperationResult.alreadyApplied(operation.operationId(), saved.id())
-                        : SyncOperationResult.applied(operation.operationId(), saved.id());
+                yield remainingCommands.selection(operation.batchId(),farmId,userId,payload,null).acknowledgement();
             }
             case "SELECTION_SESSION_UPDATE" -> {
                 requireManager(role);
@@ -232,76 +210,30 @@ public class SyncOperationService {
                 if (!operation.operationId().equals(payload.operationId())) {
                     throw new BadRequestException("The operation ID does not match the selection session update payload");
                 }
-                SelectionSessionResponse saved = selectionSessionService.updateDraft(
-                        operation.batchId(), farmId, sessionId, payload);
-                yield SyncOperationResult.applied(operation.operationId(), saved.id());
+                var execution = selectionCommands.update(operation.batchId(), farmId, userId, sessionId, payload);
+                SelectionSessionResponse saved = execution.outcome();
+                yield new SyncOperationResult(operation.operationId(), execution.replayed() ? "ALREADY_APPLIED" : "APPLIED",
+                        saved.id(), saved.updatedAt(), null);
             }
             case "SEX_COMPOSITION" -> {
                 CreateSexCompositionRequest payload = readPayload(operation, CreateSexCompositionRequest.class, "sex composition");
                 validatePayload(payload, "sex composition");
                 if (!operation.operationId().equals(payload.operationId())) throw new BadRequestException("The operation ID does not match the sex composition payload");
-                BatchSexCompositionService.RecordResult result = sexCompositionService.recordResult(operation.batchId(), farmId, userId, payload);
-                yield result.alreadyApplied()
-                        ? SyncOperationResult.alreadyApplied(operation.operationId(), result.response().id())
-                        : SyncOperationResult.applied(operation.operationId(), result.response().id());
+                yield remainingCommands.composition(operation.batchId(),farmId,userId,payload).acknowledgement();
             }
             case "VACCINATION_PLAN" -> {
-                Long planId = operation.payload().path("planId").asLong(0);
-                if (planId <= 0) throw new BadRequestException("Vaccination sync payload is missing planId");
-                RecordVaccinationRequest payload = objectMapper.convertValue(operation.payload(), RecordVaccinationRequest.class);
-                if (payload.recordedAt() == null) {
-                    payload = new RecordVaccinationRequest(operation.occurredAt(), payload.quantity(), payload.unit(),
-                            payload.notes(), payload.operationId());
-                }
-                if (!operation.operationId().equals(payload.operationId())) throw new BadRequestException("The operation ID does not match the vaccination payload");
-                validatePayload(payload, "vaccination record");
-                VaccinationPlanItemResponse saved = vaccinationService.record(planId, farmId, userId, role, payload);
-                yield SyncOperationResult.applied(operation.operationId(), saved.id());
+                long planId=resourceId(operation,"planId");
+                RecordVaccinationRequest payload=readPayload(operation,RecordVaccinationRequest.class,"vaccination record");
+                if(!operation.operationId().equals(payload.operationId())) throw new BadRequestException("The operation ID does not match the vaccination payload");
+                validatePayload(payload,"vaccination record");
+                yield remainingCommands.vaccination(planId,farmId,userId,role,payload,operation.batchId(),operation.occurredAt()).acknowledgement();
             }
             case "VACCINATION_SCHEDULE" -> {
-                OfflineSyncReceipt receipt = receiptRepository == null ? null
-                        : receiptRepository.findByOperationIdAndFarmId(operation.operationId(), farmId).orElse(null);
-                if (receipt != null) {
-                    yield SyncOperationResult.alreadyApplied(operation.operationId(), receipt.getServerId());
-                }
-                String action = operation.payload().path("action").asText("ASSIGN").toUpperCase(java.util.Locale.ROOT);
-                long programId = operation.payload().path("programId").asLong(0);
-                if (action.equals("CREATE_AND_ASSIGN")) {
-                    CreateVaccinationProgramRequest programPayload = objectMapper.convertValue(
-                            operation.payload().path("program"), CreateVaccinationProgramRequest.class);
-                    validatePayload(programPayload, "vaccination program");
-                    VaccinationProgramResponse created = vaccinationService.createProgram(farmId, userId, programPayload);
-                    programId = created.id();
-                    action = operation.payload().path("replace").asBoolean(false) ? "REPLACE" : "ASSIGN";
-                }
-                if (programId <= 0 || (!action.equals("ASSIGN") && !action.equals("REPLACE"))) {
-                    throw new BadRequestException("Vaccination schedule sync needs action and programId");
-                }
-                long assignedProgramId = programId;
-                List<VaccinationPlanItemResponse> current = vaccinationService.plan(operation.batchId(), farmId);
-                boolean alreadyApplied = !current.isEmpty() && current.stream().allMatch(item -> item.programId() == assignedProgramId);
-                List<VaccinationPlanItemResponse> saved = alreadyApplied
-                        ? current
-                        : action.equals("REPLACE")
-                            ? vaccinationService.replace(operation.batchId(), farmId, userId,
-                                new com.poultryprophet.vaccination.dto.ReplaceVaccinationPlanRequest(assignedProgramId))
-                            : vaccinationService.assign(operation.batchId(), farmId, userId,
-                                new com.poultryprophet.vaccination.dto.AssignVaccinationProgramRequest(assignedProgramId));
-                if (receiptRepository != null) {
-                    OfflineSyncReceipt created = new OfflineSyncReceipt();
-                    created.setOperationId(operation.operationId());
-                    created.setFarmId(farmId);
-                    created.setEntityType(operation.entityType());
-                    created.setServerId(saved.isEmpty() ? null : saved.get(0).id());
-                    receiptRepository.save(created);
-                }
-                yield alreadyApplied
-                        ? SyncOperationResult.alreadyApplied(operation.operationId(), saved.isEmpty() ? null : saved.get(0).id())
-                        : SyncOperationResult.applied(operation.operationId(), saved.isEmpty() ? null : saved.get(0).id());
+                requireManager(role);
+                yield applyVaccinationSchedule(operation, farmId, userId);
             }
             case "TASK_STATUS" -> {
-                long taskId = operation.payload().path("taskId").asLong(0);
-                if (taskId <= 0) throw new BadRequestException("Task sync payload is missing taskId");
+                long taskId = resourceId(operation,"taskId");
                 var taskPayload = operation.payload().deepCopy();
                 if (taskPayload instanceof com.fasterxml.jackson.databind.node.ObjectNode object) object.remove("taskId");
                 UpdateTaskStatusRequest payload;
@@ -318,20 +250,81 @@ public class SyncOperationService {
                             payload.occurredAt() == null ? operation.occurredAt() : payload.occurredAt());
                 }
                 validatePayload(payload, "task status");
-                TaskResponse saved = taskService.updateStatus(taskId, farmId, userId, role == Role.MANAGER, payload);
-                yield SyncOperationResult.applied(operation.operationId(), saved.id());
+                yield remainingCommands.task(taskId,farmId,userId,role==Role.MANAGER,payload,operation.batchId()).acknowledgement();
             }
             default -> throw new BadRequestException("Unsupported offline operation: " + operation.entityType());
         };
     }
 
+    private SyncOperationResult applyVaccinationSchedule(SyncOperationRequest operation, Long farmId, Long userId) {
+        if (!(operation.payload() instanceof ObjectNode original)) throw new BadRequestException("Invalid vaccination schedule payload");
+        if (original.hasNonNull("operationId") && !operation.operationId().toString().equals(original.path("operationId").asText()))
+            throw new BadRequestException("The operation ID does not match the schedule payload");
+        ObjectNode canonical = original.deepCopy();
+        canonical.put("operationId", operation.operationId().toString());
+        canonical.put("commandOccurredAt", operation.occurredAt().toString());
+        canonical.put("action", original.path("action").asText("ASSIGN").toUpperCase(java.util.Locale.ROOT));
+        var execution = commandReceipts.executeOnce(new CommandReceiptService.CommandIdentity(operation.operationId(),
+                operation.schemaVersion(), farmId, userId, "VACCINATION_SCHEDULE", "BATCH", operation.batchId()),
+                canonical, SyncOperationResult.class, () -> {
+            // Old receipts prove acceptance but do not bind actor/resource/payload.
+            // Do not infer an original command from today's mutable plan.
+            if (receiptRepository.findById(operation.operationId()).isPresent()) throw new ConflictException(
+                    "This legacy schedule receipt cannot verify the original details. Keep the command for manager review.");
+            String action = canonical.path("action").asText();
+            long programId;
+            if (action.equals("CREATE_AND_ASSIGN")) {
+                if (original.has("replace") && !original.path("replace").isBoolean())
+                    throw new BadRequestException("Schedule replacement must be true or false");
+                CreateVaccinationProgramRequest program = objectMapper.convertValue(original.path("program"), CreateVaccinationProgramRequest.class);
+                validatePayload(program, "vaccination program");
+                programId = vaccinationService.createProgram(farmId, userId, program).id();
+                action = original.path("replace").asBoolean(false) ? "REPLACE" : "ASSIGN";
+            } else {
+                if ((!action.equals("ASSIGN") && !action.equals("REPLACE")) || !original.path("programId").isIntegralNumber()
+                        || !original.path("programId").canConvertToLong() || original.path("programId").asLong() <= 0)
+                    throw new BadRequestException("Vaccination schedule sync needs a valid action and program ID");
+                programId = original.path("programId").asLong();
+            }
+            List<VaccinationPlanItemResponse> saved = action.equals("REPLACE")
+                    ? vaccinationService.replace(operation.batchId(), farmId, userId,
+                        new com.poultryprophet.vaccination.dto.ReplaceVaccinationPlanRequest(programId))
+                    : vaccinationService.assign(operation.batchId(), farmId, userId,
+                        new com.poultryprophet.vaccination.dto.AssignVaccinationProgramRequest(programId));
+            return new SyncOperationResult(operation.operationId(), "APPLIED", saved.isEmpty() ? null : saved.getFirst().id(),
+                    clock.instant(), null, programId);
+        });
+        SyncOperationResult saved = execution.outcome();
+        return execution.replayed() ? new SyncOperationResult(operation.operationId(), "ALREADY_APPLIED", saved.serverId(),
+                saved.serverTime(), saved.message(), saved.programId()) : saved;
+    }
+
+    private long resourceId(SyncOperationRequest operation,String field) {
+        var value=operation.payload()==null?null:operation.payload().get(field);
+        if(value==null || !value.isIntegralNumber() || !value.canConvertToLong() || value.asLong()<=0)
+            throw new BadRequestException("The sync payload needs a positive integer " + field);
+        return value.asLong();
+    }
+
     private void requireManager(Role role) {
         if (role != Role.MANAGER) {
-            throw new BadRequestException("Only farm managers can sync selection sessions");
+            throw new BadRequestException("Only farm managers can sync selection sessions or vaccination schedules");
         }
     }
 
-    private SyncOperationResult applyDailyRecord(SyncOperationRequest operation, Long farmId, Long userId) {
+    private SyncOperationResult dailyCommand(SyncOperationRequest operation,Long farmId,Long userId) {
+        CreateRecordRequest payload=validateDailyRecord(operation,farmId,userId);
+        ObjectNode canonical=(ObjectNode)operation.payload().deepCopy();
+        canonical.put("commandOccurredAt",operation.occurredAt().toString());
+        var execution=commandReceipts.executeOnce(new CommandReceiptService.CommandIdentity(operation.operationId(),
+                operation.schemaVersion(),farmId,userId,"DAILY_RECORD","BATCH",operation.batchId()),canonical,
+                SyncOperationResult.class,()->applyDailyRecord(operation,farmId,userId,payload));
+        var saved=execution.outcome();
+        return execution.replayed()?new SyncOperationResult(operation.operationId(),"ALREADY_APPLIED",saved.serverId(),
+                saved.serverTime(),saved.message()):saved;
+    }
+
+    private CreateRecordRequest validateDailyRecord(SyncOperationRequest operation, Long farmId, Long userId) {
         if (!(operation.payload() instanceof ObjectNode original)
                 || !operation.operationId().toString().equals(original.path("operationId").asText())) {
             throw new BadRequestException("The operation ID does not match the measurement payload");
@@ -358,6 +351,18 @@ public class SyncOperationService {
             throw new BadRequestException("Enter at least one measurement or note");
         }
 
+        return payload;
+    }
+
+    private SyncOperationResult applyDailyRecord(SyncOperationRequest operation,Long farmId,Long userId,CreateRecordRequest payload) {
+        ObjectNode original=(ObjectNode)operation.payload();
+        if (!Boolean.TRUE.equals(jdbcTemplate.queryForObject("SELECT to_regclass('offline_daily_record_receipt') IS NOT NULL",Boolean.class))) {
+            // V27 is legacy evidence, not a prerequisite for the shared boundary.
+            // The shared UUID reservation and the domain date uniqueness still
+            // commit or roll back together when this legacy table never existed.
+            var saved=dailyRecordService.recordOffline(operation.batchId(),farmId,payload,userId);
+            return SyncOperationResult.applied(operation.operationId(),saved.id());
+        }
         // PostgreSQL waits for a concurrent owner of this key before deciding whether
         // the insert succeeded. The receipt and record commit or roll back together.
         String json = original.toString();
@@ -367,12 +372,13 @@ public class SyncOperationService {
                         + "ON CONFLICT (operation_id) DO NOTHING",
                 operation.operationId(), farmId, userId, operation.batchId(), occurred, json);
         if (inserted == 0) {
-            List<Long> matching = jdbcTemplate.query("SELECT server_id FROM offline_daily_record_receipt "
+            List<SyncOperationResult> matching = jdbcTemplate.query("SELECT server_id, created_at FROM offline_daily_record_receipt "
                             + "WHERE operation_id = ? AND farm_id = ? AND user_id = ? AND batch_id = ? "
                             + "AND occurred_at = ? AND payload = CAST(? AS jsonb) AND server_id IS NOT NULL",
-                    (rs, row) -> rs.getLong(1), operation.operationId(), farmId, userId, operation.batchId(), occurred, json);
+                    (rs, row) -> new SyncOperationResult(operation.operationId(),"ALREADY_APPLIED",rs.getLong(1),
+                            rs.getTimestamp(2).toInstant(),null), operation.operationId(), farmId, userId, operation.batchId(), occurred, json);
             if (matching.isEmpty()) throw new ConflictException("This operation ID was already used for a different measurement.");
-            return SyncOperationResult.alreadyApplied(operation.operationId(), matching.getFirst());
+            return matching.getFirst();
         }
         var saved = dailyRecordService.recordOffline(operation.batchId(), farmId, payload, userId);
         jdbcTemplate.update("UPDATE offline_daily_record_receipt SET server_id = ? WHERE operation_id = ?", saved.id(), operation.operationId());

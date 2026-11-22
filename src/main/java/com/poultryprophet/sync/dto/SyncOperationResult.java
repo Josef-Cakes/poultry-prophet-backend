@@ -8,8 +8,12 @@ public record SyncOperationResult(
         String status,
         Long serverId,
         Instant serverTime,
-        String message
+        String message,
+        Long programId
 ) {
+    public SyncOperationResult(UUID operationId, String status, Long serverId, Instant serverTime, String message) {
+        this(operationId, status, serverId, serverTime, message, null);
+    }
     public static SyncOperationResult applied(UUID id, Long serverId) {
         return new SyncOperationResult(id, "APPLIED", serverId, Instant.now(), null);
     }
