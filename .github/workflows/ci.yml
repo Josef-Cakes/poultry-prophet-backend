@@ -28,8 +28,12 @@ jobs:
       - run: chmod +x mvnw
       - run: python3 scripts/check-migration-track.py
       - run: python3 -m unittest scripts/test-migration-track.py
-      - name: Prepare disposable receipt table
-        run: docker exec -i ${{ job.services.postgres.id }} psql -v ON_ERROR_STOP=1 -U poultry_validation -d poultry_prophet_validation < src/main/resources/db/reviewed-migration/V27__offline_daily_record_receipts.sql
+        - name: Prepare shared command receipts
+        run: |
+          docker exec -i ${{ job.services.postgres.id }} \
+            psql -v ON_ERROR_STOP=1 \
+            -U poultry_validation -d poultry_prophet_validation \
+            < src/main/resources/db/reviewed-migration/V32__shared_command_receipts.sql
       - run: ./mvnw --batch-mode test
         env:
           POULTRY_DISPOSABLE_DB_URL: jdbc:postgresql://127.0.0.1:25432/poultry_prophet_validation
