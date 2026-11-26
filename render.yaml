@@ -25,5 +25,4 @@ services:
         sync: false
       - key: JWT_SECRET
         generateValue: true
-      - key: APP_RENDER_URL
-        value: https://poultry-prophet-backend.onrender.com
+      # RENDER_EXTERNAL_URL is provided by Render; APP_RENDER_URL may override it.

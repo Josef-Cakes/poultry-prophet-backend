@@ -76,7 +76,7 @@ app:
   legacy:
     allow-mortality-reconciliation: ${APP_ALLOW_LEGACY_MORTALITY_RECONCILIATION:false}
   render:
-    url: ${APP_RENDER_URL:}
+    url: ${APP_RENDER_URL:${RENDER_EXTERNAL_URL:}}
   keep-alive:
     initial-delay-ms: ${APP_KEEP_ALIVE_INITIAL_DELAY_MS:60000}
     fixed-rate-ms: ${APP_KEEP_ALIVE_FIXED_RATE_MS:600000}

@@ -103,9 +103,49 @@ curl http://localhost:8080/api/health
 # {"status":"UP"}
 ```
 
+For CPU-constrained local startup experiments, the local preview launcher and
+validation Compose stack use `-XX:TieredStopAtLevel=1`. In isolated tests with a
+0.25-CPU, 512-MB limit, startup took 56.5 and 61.6 seconds with this option,
+versus 113.1 seconds in one run without it. The setting trades some peak JIT
+optimization for startup speed. Set `POULTRY_FAST_START=0` for the preview
+launcher, or `VALIDATION_JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=75.0` for the
+validation stack, to compare or disable it. It is not enabled in the production
+Dockerfile. Benchmark sustained workloads and staging startup before considering
+it for any deployment.
+
+The scheduled self-ping uses Render's `RENDER_EXTERNAL_URL` when no explicit
+`APP_RENDER_URL` is set. An existing explicit value wins, including an empty
+value that disables the ping. Review any existing service override before a
+future release. Self-pinging cannot start a stopped instance and does not
+guarantee availability.
+
 > **JDK 25 note:** Hibernate's ByteBuddy may not officially recognise very new JDKs. The
 > app sets `net.bytebuddy.experimental=true` at startup to allow it. If you hit a bytecode
 > error, run on JDK 21 instead.
+
+## Run the isolated local app
+
+Use the validation stack for local recording and sync checks. It uses a separate
+Docker database and does not read the normal `.env` farm datasource.
+
+Copy `.env.validation.example` to the untracked `.env.validation`, fill in the
+validation database credentials, JWT secret and manager/handler accounts, then run:
+
+```bash
+set -a
+source .env.validation
+set +a
+bash scripts/validation-up.sh
+```
+
+The startup script waits for the local database, prepares shared command receipts
+once, and starts the backend with receipt-backed syncing enabled. Re-running it
+retains existing validation records. The API defaults to `http://localhost:18080/api`;
+its `/version` response must show `commandReceipts: true` and `schemaReady: true`.
+
+In the frontend repository, run `pnpm dev:local` for the local app at
+`http://localhost:3000`. That command explicitly targets the local validation API,
+overriding the frontend's usual `.env.local` backend setting.
 
 ## Auth quick start
 

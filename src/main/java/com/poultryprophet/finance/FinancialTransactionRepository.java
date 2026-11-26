@@ -13,6 +13,9 @@ public interface FinancialTransactionRepository extends JpaRepository<FinancialT
     List<FinancialTransaction> findByFarmIdAndBatchIdAndTransactionDateBetweenOrderByTransactionDateAsc(
             Long farmId, Long batchId, LocalDate start, LocalDate end);
     Optional<FinancialTransaction> findByIdAndFarmId(Long id, Long farmId);
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @org.springframework.data.jpa.repository.Query("select t from FinancialTransaction t where t.id = :id and t.farmId = :farmId")
+    Optional<FinancialTransaction> findByIdAndFarmIdForUpdate(@org.springframework.data.repository.query.Param("id") Long id, @org.springframework.data.repository.query.Param("farmId") Long farmId);
     boolean existsByFarmIdAndBatchIdAndCreatedAtAfter(Long farmId, Long batchId, Instant cutoff);
     Optional<FinancialTransaction> findByFarmIdAndSourceOperationId(Long farmId, String sourceOperationId);
     Optional<FinancialTransaction> findByFarmIdAndSourceEventId(Long farmId, Long sourceEventId);

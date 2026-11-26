@@ -30,6 +30,73 @@ class InventoryServiceTest {
     @Mock private FinanceService financeService;
 
     @Test
+    void openingBalanceIsAppliedExactlyOnce() {
+        when(productRepository.save(any(FarmProduct.class))).thenAnswer(invocation -> { FarmProduct product=invocation.getArgument(0); if(product.getId()==null) product.setId(10L); return product; });
+        when(movementRepository.save(any(InventoryMovement.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        var request = new com.poultryprophet.inventory.dto.CreateFarmProductRequest(com.poultryprophet.input.InputProductType.VACCINE, "Vaccine", null, null, "vial", new BigDecimal("100"), new BigDecimal("10"), new BigDecimal("99"), true);
+        var result = new InventoryService(productRepository, movementRepository, batchService, financeService).createProduct(3L, 7L, request);
+        assertThat(result.stockOnHand()).isEqualByComparingTo("100");
+        assertThat(result.lowStock()).isFalse();
+    }
+
+    @Test
+    void rejectsFractionalOpeningQuantityForWholeUnitProduct() {
+        lenient().when(productRepository.save(any(FarmProduct.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        lenient().when(movementRepository.save(any(InventoryMovement.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        var request = new com.poultryprophet.inventory.dto.CreateFarmProductRequest(com.poultryprophet.input.InputProductType.VACCINE,
+                "Vaccine", null, null, "vial", new BigDecimal("1.5"), new BigDecimal("10"), null, false);
+        assertThatThrownBy(() -> new InventoryService(productRepository, movementRepository, batchService, financeService)
+                .createProduct(3L, 7L, request)).isInstanceOf(BadRequestException.class).hasMessageContaining("whole");
+        verifyNoInteractions(productRepository, movementRepository, financeService);
+    }
+
+    @Test
+    void rejectsFractionalStockInForWholeUnitProduct() {
+        FarmProduct product = product("vial", "5");
+        product.setAllowFractionalQuantity(false);
+        product.setAverageUnitCost(BigDecimal.TEN);
+        product.setValuationStatus(InventoryValuationStatus.VALUED);
+        when(productRepository.findByIdAndFarmIdForUpdate(10L, 3L)).thenReturn(Optional.of(product));
+        lenient().when(productRepository.save(any(FarmProduct.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        lenient().when(movementRepository.save(any(InventoryMovement.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        var request = new com.poultryprophet.inventory.dto.StockInRequest(new BigDecimal("1.5"), null,
+                BigDecimal.ZERO, null, null, false, true, null, UUID.randomUUID(), null);
+        assertThatThrownBy(() -> new InventoryService(productRepository, movementRepository, batchService, financeService)
+                .stockIn(3L, 7L, 10L, request)).isInstanceOf(BadRequestException.class).hasMessageContaining("whole");
+        assertThat(product.getStockOnHand()).isEqualByComparingTo("5");
+        verify(movementRepository, never()).save(any(InventoryMovement.class));
+        verifyNoInteractions(financeService);
+    }
+
+    @Test
+    void preservesFractionalOpeningAndStockInForFractionalProduct() {
+        when(productRepository.save(any(FarmProduct.class))).thenAnswer(invocation -> { FarmProduct p=invocation.getArgument(0); if(p.getId()==null) p.setId(10L); return p; });
+        when(movementRepository.save(any(InventoryMovement.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        var service = new InventoryService(productRepository, movementRepository, batchService, financeService);
+        var request = new com.poultryprophet.inventory.dto.CreateFarmProductRequest(com.poultryprophet.input.InputProductType.FEED,
+                "Feed", null, null, "kg", new BigDecimal("1.5"), new BigDecimal("10"), null, true);
+        assertThat(service.createProduct(3L, 7L, request).stockOnHand()).isEqualByComparingTo("1.5");
+        FarmProduct product = product("kg", "1.5");
+        product.setAverageUnitCost(BigDecimal.TEN);
+        product.setValuationStatus(InventoryValuationStatus.VALUED);
+        when(productRepository.findByIdAndFarmIdForUpdate(10L, 3L)).thenReturn(Optional.of(product));
+        service.stockIn(3L, 7L, 10L, new com.poultryprophet.inventory.dto.StockInRequest(new BigDecimal("0.5"), null,
+                BigDecimal.ZERO, null, null, false, true, null, UUID.randomUUID(), null));
+        assertThat(product.getStockOnHand()).isEqualByComparingTo("2.000");
+    }
+
+    @Test
+    void configuresThresholdForTheSameFarmAndReflectsCurrentBalance() {
+        FarmProduct product = product("vial", "5");
+        when(productRepository.findByIdAndFarmIdForUpdate(10L, 3L)).thenReturn(Optional.of(product));
+        when(productRepository.save(any(FarmProduct.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        var service = new InventoryService(productRepository, movementRepository, batchService, financeService);
+        assertThat(service.setReorderLevel(3L, 10L, new BigDecimal("5")).lowStock()).isTrue();
+        assertThat(service.setReorderLevel(3L, 10L, null).lowStock()).isFalse();
+        assertThatThrownBy(() -> service.setReorderLevel(3L, 10L, new BigDecimal("-1"))).isInstanceOf(BadRequestException.class);
+    }
+
+    @Test
     void marksOnlyProductsWithDocumentedDemoStockForBothRoles() {
         FarmProduct demo = product("sachet", "5");
         FarmProduct ordinary = product("pack", "3");
@@ -83,6 +150,34 @@ class InventoryServiceTest {
         assertThat(result.movementId()).isNull();
         assertThat(product.getStockOnHand()).isEqualByComparingTo("0.5");
         verify(movementRepository, never()).save(any(InventoryMovement.class));
+    }
+
+    @Test
+    void keepsUnavailableLinkedProductUseForManagerReview() {
+        when(productRepository.findByIdAndFarmIdForUpdate(10L, 3L)).thenReturn(Optional.empty());
+
+        InventoryUseResult result = new InventoryService(productRepository, movementRepository, batchService, financeService)
+                .applyUsage(3L, 7L, 10L, new BigDecimal("1"), Instant.now(), 8L, 44L);
+
+        assertThat(result.status()).isEqualTo(InventoryStatus.PENDING_STOCK_REVIEW.name());
+        assertThat(result.movementId()).isNull();
+        assertThat(result.batchCost()).isNull();
+        verifyNoInteractions(movementRepository);
+    }
+
+    @Test
+    void keepsInactiveLinkedProductUseForManagerReview() {
+        FarmProduct inactive = product("bottle", "5");
+        inactive.setActive(false);
+        when(productRepository.findByIdAndFarmIdForUpdate(10L, 3L)).thenReturn(Optional.of(inactive));
+
+        InventoryUseResult result = new InventoryService(productRepository, movementRepository, batchService, financeService)
+                .applyUsage(3L, 7L, 10L, new BigDecimal("1"), Instant.now(), 8L, 44L);
+
+        assertThat(result.status()).isEqualTo(InventoryStatus.PENDING_STOCK_REVIEW.name());
+        assertThat(result.movementId()).isNull();
+        assertThat(inactive.getStockOnHand()).isEqualByComparingTo("5");
+        verifyNoInteractions(movementRepository);
     }
 
     @Test
@@ -178,6 +273,28 @@ class InventoryServiceTest {
         assertThat(result.costStatus()).isEqualTo(InventoryValuationStatus.FREE.name());
         assertThat(result.inventoryValueDelta()).isEqualByComparingTo("0.00");
         verifyNoInteractions(financeService);
+    }
+
+    @Test
+    void stockInReplayRequiresTheOriginalRecordedActor() {
+        UUID id = UUID.randomUUID();
+        InventoryMovement existing = new InventoryMovement();
+        existing.setId(51L); existing.setFarmId(3L); existing.setFarmProductId(10L);
+        existing.setMovementType(InventoryMovementType.STOCK_IN); existing.setQuantityDelta(BigDecimal.ONE);
+        existing.setUnitCostSnapshot(BigDecimal.ZERO); existing.setCostStatus(InventoryValuationStatus.FREE);
+        existing.setRecordedBy(7L);
+        when(movementRepository.findByOperationId(id)).thenReturn(Optional.of(existing));
+        var request = new com.poultryprophet.inventory.dto.StockInRequest(BigDecimal.ONE, null,
+                BigDecimal.ZERO, null, null, false, true, null, id, null);
+        var service = new InventoryService(productRepository, movementRepository, batchService, financeService);
+        assertThat(service.stockIn(3L, 7L, 10L, request).id()).isEqualTo(51L);
+        assertThatThrownBy(() -> service.stockIn(3L, 8L, 10L, request))
+                .isInstanceOf(com.poultryprophet.common.ConflictException.class);
+        existing.setRecordedBy(null);
+        assertThatThrownBy(() -> service.stockIn(3L, 7L, 10L, request))
+                .isInstanceOf(com.poultryprophet.common.ConflictException.class);
+        verify(movementRepository, never()).save(any(InventoryMovement.class));
+        verifyNoInteractions(productRepository, financeService);
     }
 
     @Test

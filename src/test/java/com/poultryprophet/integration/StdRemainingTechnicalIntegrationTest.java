@@ -31,7 +31,16 @@ class StdRemainingTechnicalIntegrationTest {
     @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
     @DynamicPropertySource
     static void database(DynamicPropertyRegistry properties) {
-        properties.add("spring.datasource.url", () -> System.getenv("POULTRY_DISPOSABLE_DB_URL"));
+        String url = System.getenv("POULTRY_DISPOSABLE_DB_URL");
+        if (!"jdbc:postgresql://127.0.0.1:25432/poultry_prophet_validation".equals(url)) throw new IllegalStateException("Disposable DB required before connecting");
+        String schema = "technical_qa_" + UUID.randomUUID().toString().replace("-", "");
+        var admin = new org.springframework.jdbc.datasource.DriverManagerDataSource(url, "poultry_validation", "local-disposable-only");
+        new org.springframework.jdbc.core.JdbcTemplate(admin).execute("CREATE SCHEMA " + schema);
+        String scoped = url + "?currentSchema=" + schema;
+        new org.springframework.jdbc.datasource.init.ResourceDatabasePopulator(
+                new org.springframework.core.io.ClassPathResource("db/reviewed-migration/V32__shared_command_receipts.sql"))
+                .execute(new org.springframework.jdbc.datasource.DriverManagerDataSource(scoped, "poultry_validation", "local-disposable-only"));
+        properties.add("spring.datasource.url", () -> scoped);
         properties.add("spring.datasource.username", () -> "poultry_validation");
         properties.add("spring.datasource.password", () -> "local-disposable-only");
         properties.add("poultry.security.jwt-secret", () -> "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=");

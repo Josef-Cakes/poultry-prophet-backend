@@ -88,6 +88,10 @@ public class InventoryService {
         requireFarm(farmId);
         String brand = required(request.brandName(), "Product or brand name is required");
         String unit = normalizeUnit(request.stockUnit());
+        if (Boolean.FALSE.equals(request.allowFractionalQuantity()) && request.openingQuantity() != null
+                && request.openingQuantity().stripTrailingZeros().scale() > 0) {
+            throw new BadRequestException("Opening quantity must use whole units for this product");
+        }
         BigDecimal opening = normalize(request.openingQuantity());
         FarmProduct product = new FarmProduct();
         product.setFarmId(farmId);
@@ -97,7 +101,8 @@ public class InventoryService {
         product.setProductName(trim(request.productName()));
         product.setPackageDescription(trim(request.packageDescription()));
         product.setStockUnit(unit);
-        product.setStockOnHand(opening);
+        // The opening-balance movement applies the quantity once below.
+        product.setStockOnHand(BigDecimal.ZERO.setScale(SCALE));
         BigDecimal openingUnitCost = request.openingUnitCost();
         if (openingUnitCost != null && openingUnitCost.signum() < 0) {
             throw new BadRequestException("Opening unit cost cannot be negative");
@@ -109,7 +114,7 @@ public class InventoryService {
         } else {
             product.setValuationStatus(InventoryValuationStatus.UNVALUED);
         }
-        product.setReorderLevel(nonNegative(request.reorderLevel(), "Reorder level cannot be negative"));
+        product.setReorderLevel(request.reorderLevel() == null ? null : nonNegative(request.reorderLevel(), "Reorder level cannot be negative"));
         product.setAllowFractionalQuantity(request.allowFractionalQuantity() == null || request.allowFractionalQuantity());
         product = productRepository.save(product);
         if (opening.signum() > 0) {
@@ -122,16 +127,28 @@ public class InventoryService {
     }
 
     @Transactional
+    public FarmProductResponse setReorderLevel(Long farmId, Long productId, BigDecimal level) {
+        requireFarm(farmId);
+        FarmProduct product = productRepository.findByIdAndFarmIdForUpdate(productId, farmId)
+                .orElseThrow(() -> new NotFoundException("Product not found"));
+        product.setReorderLevel(level == null ? null : nonNegative(level, "Reorder level cannot be negative"));
+        return FarmProductResponse.from(productRepository.save(product));
+    }
+
+    @Transactional
     public InventoryMovementResponse stockIn(Long farmId, Long userId, Long productId, StockInRequest request) {
         requireFarm(farmId);
         UUID operationId = request.operationId() == null ? UUID.randomUUID() : request.operationId();
         InventoryMovement duplicate = movementRepository.findByOperationId(operationId).orElse(null);
-        if (duplicate != null) return stockInReplay(farmId, productId, request, duplicate);
+        if (duplicate != null) return stockInReplay(farmId, userId, productId, request, duplicate);
         BigDecimal quantity = positive(request.quantity(), "Stock quantity must be greater than zero");
         FarmProduct product = productRepository.findByIdAndFarmIdForUpdate(productId, farmId)
                 .orElseThrow(() -> new NotFoundException("Product not found"));
         duplicate = movementRepository.findByOperationId(operationId).orElse(null);
-        if (duplicate != null) return stockInReplay(farmId, productId, request, duplicate);
+        if (duplicate != null) return stockInReplay(farmId, userId, productId, request, duplicate);
+        if (!product.isAllowFractionalQuantity() && request.quantity().stripTrailingZeros().scale() > 0) {
+            throw new BadRequestException("Stock quantity must use whole units for this product");
+        }
         if (request.batchId() != null) {
             throw new BadRequestException("Stock purchases are farm-wide; record product use on the batch instead");
         }
@@ -211,8 +228,8 @@ public class InventoryService {
         }
         FarmProduct product = productRepository.findByIdAndFarmIdForUpdate(productId, farmId).orElse(null);
         if (product == null || !product.isActive()) {
-            return new InventoryUseResult(null, InventoryStatus.UNTRACKED.name(), null, null, null, null, null, null, null,
-                    "The product is not available in the current farm catalog.");
+            return new InventoryUseResult(null, InventoryStatus.PENDING_STOCK_REVIEW.name(), null, null, null, null, null, null, null,
+                    "The product is unavailable. Manager stock review is needed.");
         }
         if (batchId != null) batchService.requireWritableBatch(batchId, farmId);
         if (movementRepository.existsByFarmIdAndFarmInputLogId(farmId, inputLogId)) {
@@ -339,7 +356,7 @@ public class InventoryService {
         return InventoryMovementResponse.from(movement);
     }
 
-    private InventoryMovementResponse stockInReplay(Long farmId, Long productId, StockInRequest request,
+    private InventoryMovementResponse stockInReplay(Long farmId, Long userId, Long productId, StockInRequest request,
                                                      InventoryMovement movement) {
         BigDecimal quantity = positive(request.quantity(), "Stock quantity must be greater than zero");
         BigDecimal unitCost = request.purchaseUnitCost();
@@ -347,7 +364,8 @@ public class InventoryService {
             unitCost = request.totalCost().divide(quantity, COST_SCALE, RoundingMode.HALF_UP);
         }
         if (Boolean.TRUE.equals(request.freeOfCharge()) && unitCost == null) unitCost = BigDecimal.ZERO;
-        if (!sameMovement(movement, farmId, productId, InventoryMovementType.STOCK_IN, quantity)
+        if (movement.getRecordedBy() == null || !Objects.equals(userId, movement.getRecordedBy())
+                || !sameMovement(movement, farmId, productId, InventoryMovementType.STOCK_IN, quantity)
                 || request.batchId() != null || unitCost == null || unitCost.signum() < 0
                 || (Boolean.TRUE.equals(request.freeOfCharge()) && unitCost.signum() != 0)
                 || movement.getUnitCostSnapshot() == null
