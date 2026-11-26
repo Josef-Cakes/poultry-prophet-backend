@@ -21,12 +21,14 @@ public class FinancialTransaction {
     @Column(columnDefinition = "text") private String description;
     @Column(name = "source_type", nullable = false, length = 32) private String sourceType = "MANUAL";
     @Column(name = "source_event_id") private Long sourceEventId;
+    @Column(name = "correction_of_id") private Long correctionOfId;
+    @Column(name = "correction_expected_updated_at") private Instant correctionExpectedUpdatedAt;
     @Column(name = "source_operation_id", length = 80) private String sourceOperationId;
     @Enumerated(EnumType.STRING) @Column(nullable = false) private FinanceTransactionStatus status = FinanceTransactionStatus.POSTED;
     @Column(nullable = false) private Long enteredBy;
     @Column(columnDefinition = "text") private String voidReason;
-    @Column(nullable = false, updatable = false) private Instant createdAt = Instant.now();
-    @Column(nullable = false) private Instant updatedAt = Instant.now();
+    @Column(nullable = false, updatable = false) private Instant createdAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+    @Column(nullable = false) private Instant updatedAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
@@ -52,6 +54,10 @@ public class FinancialTransaction {
     public void setDescription(String description) { this.description = description; }
     public String getSourceType() { return sourceType; }
     public void setSourceType(String sourceType) { this.sourceType = sourceType; }
+    public Instant getCorrectionExpectedUpdatedAt() { return correctionExpectedUpdatedAt; }
+    public void setCorrectionExpectedUpdatedAt(Instant value) { correctionExpectedUpdatedAt = value; }
+    public Long getCorrectionOfId() { return correctionOfId; }
+    public void setCorrectionOfId(Long value) { correctionOfId = value; }
     public Long getSourceEventId() { return sourceEventId; }
     public void setSourceEventId(Long sourceEventId) { this.sourceEventId = sourceEventId; }
     public String getSourceOperationId() { return sourceOperationId; }

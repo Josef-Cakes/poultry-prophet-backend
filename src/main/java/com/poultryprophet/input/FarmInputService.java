@@ -81,7 +81,6 @@ public class FarmInputService {
                     || !java.util.Objects.equals(request.affectedBirdCount(), existing.getAffectedBirdCount())) {
                 throw new ConflictException("operationId has already been used for a different input record");
             }
-            if (vaccinationInputLinker != null) vaccinationInputLinker.linkIfScheduled(existing);
             return FarmInputLogResponse.from(existing);
         }
         if (request.batchId() == null && request.incubationCycleId() == null) {
@@ -114,7 +113,7 @@ public class FarmInputService {
         log.setInventoryStatus(request.farmProductId() == null
                 ? InventoryStatus.UNTRACKED : InventoryStatus.PENDING_STOCK_REVIEW);
         FarmInputLog saved = repository.save(log);
-        if (vaccinationInputLinker != null) vaccinationInputLinker.linkIfScheduled(saved);
+        // Scheduled doses are completed through their explicit vaccination command.
         if (inventoryService != null && request.farmProductId() != null) {
             if (request.quantity() == null) {
                 throw new BadRequestException("Enter the units used for a catalog product so stock and batch cost can be updated");

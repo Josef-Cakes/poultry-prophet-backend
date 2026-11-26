@@ -14,6 +14,7 @@ class CommandReceiptServiceTest {
         assertThat(service.isReady()).isFalse();
         assertThatThrownBy(() -> service.executeOnce(null, null, String.class, () -> { throw new AssertionError("Domain work must not run"); }))
                 .isInstanceOf(CommandReceiptsUnavailableException.class);
+        assertThatThrownBy(() -> service.cancelOrObserve(null, null)).isInstanceOf(CommandReceiptsUnavailableException.class);
         verifyNoInteractions(jdbc, transactions);
     }
 }

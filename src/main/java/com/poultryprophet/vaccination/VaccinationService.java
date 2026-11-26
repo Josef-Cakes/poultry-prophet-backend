@@ -29,6 +29,12 @@ import java.util.*;
 
 @Service
 public class VaccinationService {
+    static void requireActiveVaccine(com.poultryprophet.inventory.FarmProduct product) {
+        if (!product.isActive() || product.getProductType() != InputProductType.VACCINE) {
+            throw new BadRequestException("Choose an active vaccine from this farm's inventory");
+        }
+    }
+
     private static final ZoneId FARM_ZONE = ZoneId.of("Asia/Manila");
     private final VaccinationProgramRepository programRepository;
     private final VaccinationProgramItemRepository programItemRepository;
@@ -72,8 +78,9 @@ public class VaccinationService {
         for (VaccinationProgramItemRequest item : request.items()) {
             int offset = normalizedDays(item.ageOffsetValue(), item.ageOffsetUnit());
             if (item.farmProductId() != null) {
-                farmProductRepository.findByIdAndFarmId(item.farmProductId(), farmId)
+                var product = farmProductRepository.findByIdAndFarmId(item.farmProductId(), farmId)
                         .orElseThrow(() -> new BadRequestException("The selected vaccine product is not in this farm's inventory"));
+                requireActiveVaccine(product);
             }
             VaccinationProgramItem row = new VaccinationProgramItem(); row.setProgramId(saved.getId()); row.setSequenceNumber(sequence++);
             row.setVaccineName(item.vaccineName().trim()); row.setFarmProductId(item.farmProductId()); row.setAgeOffsetValue(item.ageOffsetValue());
@@ -180,6 +187,7 @@ public class VaccinationService {
         if (plan.getFarmProductId() != null) {
             var product = farmProductRepository.findByIdAndFarmId(plan.getFarmProductId(), farmId)
                     .orElseThrow(() -> new BadRequestException("The scheduled vaccine is no longer linked to a farm product"));
+            requireActiveVaccine(product);
             if (request.quantity() == null || request.quantity().signum() <= 0) {
                 throw new BadRequestException("Enter the number of vaccine units used before marking this vaccine done");
             }
@@ -197,6 +205,7 @@ public class VaccinationService {
     @Transactional
     public VaccinationPlanItemResponse skip(Long planId, Long farmId, Long managerId, SkipVaccinationRequest request) {
         BatchVaccinationPlanItem plan = planRepository.findByIdAndFarmIdForUpdate(planId, farmId).orElseThrow(() -> new NotFoundException("Vaccination plan item not found"));
+        batchService.requireWritableBatch(plan.getBatchId(), farmId);
         if ("COMPLETED".equals(plan.getStatus())) throw new ConflictException("Completed vaccination cannot be skipped");
         plan.setStatus("SKIPPED"); plan.setSkippedReason(request.reason().trim());
         if (plan.getTaskId() != null) taskRepository.findByIdAndFarmId(plan.getTaskId(), farmId).ifPresent(task -> { task.setStatus(TaskStatus.CANCELLED); task.setCompletionNote("Skipped: " + request.reason().trim()); task.setUpdatedAt(Instant.now()); taskRepository.save(task); });

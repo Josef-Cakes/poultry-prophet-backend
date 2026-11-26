@@ -55,11 +55,12 @@ class FinancialProjectionTest {
         User user = new User();
         user.setFarmId(2L);
         user.setRole(Role.HANDLER);
-        var response = new InventoryController(service).products(false, new CustomUserDetails(user));
+        var controller = new InventoryController(service, mock(com.poultryprophet.sync.CommandReceiptService.class), json);
+        var response = controller.products(false, new CustomUserDetails(user));
         assertThat(response.getFirst().averageUnitCost()).isNull();
         assertThat(response.getFirst().inventoryValue()).isNull();
         user.setRole(Role.MANAGER);
-        assertThat(new InventoryController(service).products(false, new CustomUserDetails(user))
+        assertThat(controller.products(false, new CustomUserDetails(user))
                 .getFirst().inventoryValue()).isEqualByComparingTo("100");
     }
 }

@@ -9,22 +9,49 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.poultryprophet.sync.CommandReceiptService;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/financial-transactions")
 @PreAuthorize("hasRole('MANAGER')")
 public class FinanceController {
     private final FinanceService service;
-    public FinanceController(FinanceService service) { this.service = service; }
+    private final CommandReceiptService receipts;
+    private final ObjectMapper mapper;
+    public FinanceController(FinanceService service, CommandReceiptService receipts, ObjectMapper mapper) {
+        this.service = service; this.receipts = receipts; this.mapper = mapper;
+    }
 
     @PostMapping
     public ResponseEntity<FinancialTransactionResponse> create(@Valid @RequestBody CreateFinancialTransactionRequest req,
+                                                                @RequestHeader(value = "Idempotency-Key", required = false) UUID operationId,
                                                                 @AuthenticationPrincipal CustomUserDetails principal) {
-        return ResponseEntity.status(HttpStatus.CREATED).body(service.create(principal.getFarmId(), principal.getId(), req));
+        FinancialTransactionResponse saved;
+        if (operationId == null) {
+            // Older clients retain their existing behavior until they adopt keyed submissions.
+            saved = service.create(principal.getFarmId(), principal.getId(), req);
+        } else {
+            var identity = new CommandReceiptService.CommandIdentity(operationId, 1, principal.getFarmId(), principal.getId(),
+                    "FINANCE_CREATE", "FARM", principal.getFarmId());
+            saved = receipts.executeOnce(identity, mapper.valueToTree(req), FinancialTransactionResponse.class,
+                    () -> service.create(principal.getFarmId(), principal.getId(), req)).outcome();
+        }
+        return ResponseEntity.status(HttpStatus.CREATED).body(saved);
     }
+    @PostMapping("/{id}/corrections")
+    public FinancialTransactionResponse correctExpense(@PathVariable Long id, @Valid @RequestBody CorrectExpenseRequest request,
+                                                       @AuthenticationPrincipal CustomUserDetails principal) {
+        var identity = new CommandReceiptService.CommandIdentity(request.operationId(), 1, principal.getFarmId(), principal.getId(),
+                "FINANCE_CORRECTION", "FINANCIAL_TRANSACTION", id);
+        return receipts.executeOnce(identity, mapper.valueToTree(request), FinancialTransactionResponse.class,
+                () -> service.correctExpense(id, principal.getFarmId(), principal.getId(), request)).outcome();
+    }
+
     @GetMapping
     public List<FinancialTransactionResponse> list(@RequestParam(required = false) LocalDate start,
                                                    @RequestParam(required = false) LocalDate end,

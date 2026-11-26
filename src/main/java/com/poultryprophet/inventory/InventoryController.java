@@ -10,15 +10,22 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.poultryprophet.sync.CommandReceiptService;
 
 import java.util.List;
+import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/inventory")
 public class InventoryController {
     private final InventoryService service;
+    private final CommandReceiptService receipts;
+    private final ObjectMapper mapper;
 
-    public InventoryController(InventoryService service) { this.service = service; }
+    public InventoryController(InventoryService service, CommandReceiptService receipts, ObjectMapper mapper) {
+        this.service = service; this.receipts = receipts; this.mapper = mapper;
+    }
 
     @GetMapping("/products")
     public List<FarmProductResponse> products(@RequestParam(defaultValue = "false") boolean includeInactive,
@@ -30,22 +37,49 @@ public class InventoryController {
     @PostMapping("/products")
     @PreAuthorize("hasRole('MANAGER')")
     public ResponseEntity<FarmProductResponse> create(@Valid @RequestBody CreateFarmProductRequest request,
+                                                      @RequestHeader(value = "Idempotency-Key", required = false) UUID operationId,
                                                       @AuthenticationPrincipal CustomUserDetails principal) {
-        return ResponseEntity.status(HttpStatus.CREATED).body(service.createProduct(principal.getFarmId(), principal.getId(), request));
+        FarmProductResponse saved;
+        if (operationId == null) {
+            saved = service.createProduct(principal.getFarmId(), principal.getId(), request);
+        } else {
+            var identity = new CommandReceiptService.CommandIdentity(operationId, 1, principal.getFarmId(), principal.getId(),
+                    "INVENTORY_PRODUCT_CREATE", "FARM", principal.getFarmId());
+            saved = receipts.executeOnce(identity, mapper.valueToTree(request), FarmProductResponse.class,
+                    () -> service.createProduct(principal.getFarmId(), principal.getId(), request)).outcome();
+        }
+        return ResponseEntity.status(HttpStatus.CREATED).body(saved);
+    }
+
+    public record ReorderLevelRequest(@jakarta.validation.constraints.DecimalMin("0.0") java.math.BigDecimal reorderLevel) {}
+
+    @PatchMapping("/products/{productId}/reorder-level")
+    @PreAuthorize("hasRole('MANAGER')")
+    public FarmProductResponse setReorderLevel(@PathVariable Long productId, @Valid @RequestBody ReorderLevelRequest request,
+                                                @AuthenticationPrincipal CustomUserDetails principal) {
+        return service.setReorderLevel(principal.getFarmId(), productId, request.reorderLevel());
     }
 
     @PostMapping("/products/{productId}/stock-ins")
     @PreAuthorize("hasRole('MANAGER')")
     public InventoryMovementResponse stockIn(@PathVariable Long productId, @Valid @RequestBody StockInRequest request,
                                              @AuthenticationPrincipal CustomUserDetails principal) {
-        return service.stockIn(principal.getFarmId(), principal.getId(), productId, request);
+        if (request.operationId() == null) return service.stockIn(principal.getFarmId(), principal.getId(), productId, request);
+        var identity = new CommandReceiptService.CommandIdentity(request.operationId(), 1, principal.getFarmId(), principal.getId(),
+                "INVENTORY_STOCK_IN", "FARM_PRODUCT", productId);
+        return receipts.executeOnce(identity, mapper.valueToTree(request), InventoryMovementResponse.class,
+                () -> service.stockIn(principal.getFarmId(), principal.getId(), productId, request)).outcome();
     }
 
     @PostMapping("/products/{productId}/adjustments")
     @PreAuthorize("hasRole('MANAGER')")
     public InventoryMovementResponse adjust(@PathVariable Long productId, @Valid @RequestBody InventoryAdjustmentRequest request,
                                             @AuthenticationPrincipal CustomUserDetails principal) {
-        return service.adjust(principal.getFarmId(), principal.getId(), productId, request);
+        if (request.operationId() == null) return service.adjust(principal.getFarmId(), principal.getId(), productId, request);
+        var identity = new CommandReceiptService.CommandIdentity(request.operationId(), 1, principal.getFarmId(), principal.getId(),
+                "INVENTORY_ADJUSTMENT", "FARM_PRODUCT", productId);
+        return receipts.executeOnce(identity, mapper.valueToTree(request), InventoryMovementResponse.class,
+                () -> service.adjust(principal.getFarmId(), principal.getId(), productId, request)).outcome();
     }
 
     @GetMapping("/movements")

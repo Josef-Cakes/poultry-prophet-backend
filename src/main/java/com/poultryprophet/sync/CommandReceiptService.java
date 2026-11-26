@@ -19,6 +19,8 @@ public class CommandReceiptService {
     public record CommandIdentity(UUID operationId, int schemaVersion, Long farmId, Long userId,
                                   String entityType, String resourceType, Long resourceId) {}
     public record Execution<T>(T outcome, boolean replayed) {}
+    public enum Resolution { APPLIED, CANCELLED }
+    private static final String CANCELLED_OUTCOME = "{\"managerOperationCancelled\":true}";
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
     private final TransactionTemplate transaction;
@@ -88,7 +90,14 @@ public class CommandReceiptService {
                         (rs, row) -> rs.getString(1), id.operationId(), id.schemaVersion(), id.farmId(), id.userId(),
                         id.entityType(), id.resourceType(), id.resourceId(), json);
                 if (prior.size() != 1) throw new ConflictException("This command ID is already bound to different details or ownership.");
-                try { return new Execution<>(mapper.readValue(prior.getFirst(), resultType), true); }
+                try {
+                    var outcome = mapper.readTree(prior.getFirst());
+                    if (isCancellation(outcome)) throw new ConflictException("This request was cancelled and cannot be applied.");
+                    // Deserialize the original JSON directly: parsing a timestamp
+                    // through a generic floating-point tree can lose nanoseconds.
+                    return new Execution<>(mapper.readValue(prior.getFirst(), resultType), true);
+                }
+                catch (ConflictException ex) { throw ex; }
                 catch (Exception ex) { throw new IllegalStateException("Stored command outcome could not be read", ex); }
             }
             legacy.requireUnclaimed(id.operationId(), id.entityType());
@@ -99,5 +108,44 @@ public class CommandReceiptService {
             } catch (java.io.IOException ex) { throw new IllegalStateException("Command outcome could not be stored", ex); }
             return new Execution<>(outcome, false);
         }));
+    }
+
+    /**
+     * Reserve the same key as executeOnce, so cancellation and a concurrent
+     * write serialize in PostgreSQL. The tombstone is never removed; a late
+     * original request cannot be mistaken for a new operation.
+     */
+    public Resolution cancelOrObserve(CommandIdentity id, JsonNode payload) {
+        if (!isReady()) throw new CommandReceiptsUnavailableException();
+        if (id == null || id.operationId() == null || id.schemaVersion() < 1 || id.farmId() == null || id.farmId() <= 0
+                || id.userId() == null || id.userId() <= 0 || id.resourceId() == null || id.resourceId() <= 0
+                || id.entityType() == null || id.entityType().isBlank() || id.resourceType() == null || id.resourceType().isBlank()
+                || payload == null || !payload.isObject()) throw new BadRequestException("Invalid command identity or payload");
+        String json = payload.toString();
+        return Objects.requireNonNull(transaction.execute(status -> {
+            int reserved = jdbc.update("INSERT INTO offline_command_receipt "
+                            + "(operation_id, schema_version, farm_id, user_id, entity_type, resource_type, resource_id, payload, outcome) "
+                            + "VALUES (?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb), CAST(? AS jsonb)) ON CONFLICT (operation_id) DO NOTHING",
+                    id.operationId(), id.schemaVersion(), id.farmId(), id.userId(), id.entityType(), id.resourceType(), id.resourceId(), json, CANCELLED_OUTCOME);
+            if (reserved == 1) {
+                // A legacy movement or correction may already have committed.
+                // Its original payload is incomplete, so do not claim cancellation.
+                legacy.requireUnclaimed(id.operationId(), id.entityType());
+                return Resolution.CANCELLED;
+            }
+            var prior = jdbc.query("SELECT outcome::text FROM offline_command_receipt WHERE operation_id = ? "
+                            + "AND schema_version = ? AND farm_id = ? AND user_id = ? AND entity_type = ? "
+                            + "AND resource_type = ? AND resource_id = ? AND payload = CAST(? AS jsonb) AND outcome IS NOT NULL",
+                    (rs, row) -> rs.getString(1), id.operationId(), id.schemaVersion(), id.farmId(), id.userId(),
+                    id.entityType(), id.resourceType(), id.resourceId(), json);
+            if (prior.size() != 1) throw new ConflictException("This command ID is already bound to different details or ownership.");
+            try { return isCancellation(mapper.readTree(prior.getFirst())) ? Resolution.CANCELLED : Resolution.APPLIED; }
+            catch (Exception ex) { throw new IllegalStateException("Stored command outcome could not be read", ex); }
+        }));
+    }
+
+    private static boolean isCancellation(JsonNode outcome) {
+        return outcome != null && outcome.isObject() && outcome.size() == 1 && outcome.path("managerOperationCancelled").isBoolean()
+                && outcome.path("managerOperationCancelled").booleanValue();
     }
 }

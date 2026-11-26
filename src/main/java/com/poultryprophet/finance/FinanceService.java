@@ -63,6 +63,44 @@ public class FinanceService {
         return FinancialTransactionResponse.from(repository.save(tx));
     }
 
+    @Transactional
+    public FinancialTransactionResponse correctExpense(Long id, Long farmId, Long userId, CorrectExpenseRequest req) {
+        FinancialTransaction original = repository.findByIdAndFarmIdForUpdate(id, farmId)
+                .orElseThrow(() -> new NotFoundException("Expense not found"));
+        FinancialTransaction replay = repository.findByFarmIdAndSourceOperationId(farmId, req.operationId().toString()).orElse(null);
+        if (replay != null) {
+            if (replay.getEnteredBy() == null || !java.util.Objects.equals(replay.getEnteredBy(), userId)
+                    || !java.util.Objects.equals(replay.getCorrectionOfId(), id)
+                    || !java.util.Objects.equals(replay.getCorrectionExpectedUpdatedAt(), req.expectedUpdatedAt())
+                    || !java.util.Objects.equals(replay.getTransactionDate(), req.transactionDate())
+                    || !java.util.Objects.equals(replay.getCategory(), req.category().trim())
+                    || replay.getAmount().compareTo(req.amount()) != 0
+                    || !java.util.Objects.equals(original.getVoidReason(), req.reason().trim()))
+                throw new com.poultryprophet.common.ConflictException("Operation ID belongs to a different correction");
+            return FinancialTransactionResponse.from(replay);
+        }
+        if (original.getBatchId() == null || original.getType() != FinanceTransactionType.EXPENSE
+                || !"MANUAL".equals(original.getSourceType()))
+            throw new BadRequestException("Only manual batch expenses can be corrected here");
+        batchService.requireWritableBatch(original.getBatchId(), farmId);
+        if (original.getStatus() != FinanceTransactionStatus.POSTED || !original.getUpdatedAt().equals(req.expectedUpdatedAt()))
+            throw new com.poultryprophet.common.ConflictException("This expense changed; refresh before correcting it");
+        original.setStatus(FinanceTransactionStatus.VOIDED);
+        original.setVoidReason(req.reason().trim());
+        original.setUpdatedAt(java.time.Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS));
+        repository.save(original);
+        FinancialTransaction replacement = new FinancialTransaction();
+        replacement.setFarmId(farmId); replacement.setBatchId(original.getBatchId());
+        replacement.setTransactionDate(req.transactionDate()); replacement.setType(FinanceTransactionType.EXPENSE);
+        replacement.setCategory(req.category().trim()); replacement.setAmount(req.amount());
+        replacement.setCurrency(original.getCurrency()); replacement.setCounterparty(original.getCounterparty());
+        replacement.setDescription(original.getDescription()); replacement.setSourceType("MANUAL");
+        replacement.setSourceOperationId(req.operationId().toString()); replacement.setCorrectionOfId(id);
+        replacement.setCorrectionExpectedUpdatedAt(req.expectedUpdatedAt());
+        replacement.setEnteredBy(userId);
+        return FinancialTransactionResponse.from(repository.save(replacement));
+    }
+
     /** Records a farm-wide inventory purchase within the caller's transaction. */
     @Transactional
     public FinancialTransactionResponse createInventoryPurchase(Long farmId, Long userId,
@@ -199,14 +237,14 @@ public class FinanceService {
 
     @Transactional
     public FinancialTransactionResponse voidTransaction(Long id, Long farmId, String reason) {
-        FinancialTransaction tx = repository.findByIdAndFarmId(id, farmId)
+        FinancialTransaction tx = repository.findByIdAndFarmIdForUpdate(id, farmId)
                 .orElseThrow(() -> new NotFoundException("Financial transaction " + id + " not found"));
         if (tx.getBatchId() != null) batchService.requireWritableBatch(tx.getBatchId(), farmId);
         if (tx.getStatus() == FinanceTransactionStatus.VOIDED) throw new BadRequestException("Transaction is already voided");
         if ("SALE_EVENT".equalsIgnoreCase(tx.getSourceType())) {
             throw new BadRequestException("Sale income must be corrected through the linked sale correction workflow");
         }
-        tx.setStatus(FinanceTransactionStatus.VOIDED); tx.setVoidReason(trim(reason));
+        tx.setStatus(FinanceTransactionStatus.VOIDED); tx.setVoidReason(trim(reason)); tx.setUpdatedAt(java.time.Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS));
         return FinancialTransactionResponse.from(repository.save(tx));
     }
 

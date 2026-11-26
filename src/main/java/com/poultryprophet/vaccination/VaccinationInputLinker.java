@@ -58,18 +58,21 @@ public class VaccinationInputLinker {
 
     private BatchVaccinationPlanItem findMatch(List<BatchVaccinationPlanItem> candidates, FarmInputLog input) {
         if (input.getFarmProductId() != null) {
-            for (BatchVaccinationPlanItem candidate : candidates) {
-                if (input.getFarmProductId().equals(candidate.getFarmProductId())) return candidate;
-            }
+            List<BatchVaccinationPlanItem> matches = candidates.stream()
+                    .filter(candidate -> input.getFarmProductId().equals(candidate.getFarmProductId())).toList();
+            return matches.size() == 1 ? matches.get(0) : null;
         }
+        // Legacy untracked records may match an unlinked schedule only when the
+        // match is unambiguous. Never use a name to override a product identity.
         String brandName = normalize(input.getBrandName());
         String productName = normalize(input.getProductName());
-        for (BatchVaccinationPlanItem candidate : candidates) {
-            String vaccineName = normalize(candidate.getVaccineName());
-            if ((!brandName.isBlank() && vaccineName.equals(brandName))
-                    || (!productName.isBlank() && vaccineName.equals(productName))) return candidate;
-        }
-        return null;
+        List<BatchVaccinationPlanItem> matches = candidates.stream()
+                .filter(candidate -> candidate.getFarmProductId() == null)
+                .filter(candidate -> {
+                    String name = normalize(candidate.getVaccineName());
+                    return (!brandName.isBlank() && name.equals(brandName)) || (!productName.isBlank() && name.equals(productName));
+                }).toList();
+        return matches.size() == 1 ? matches.get(0) : null;
     }
 
     private String normalize(String value) {

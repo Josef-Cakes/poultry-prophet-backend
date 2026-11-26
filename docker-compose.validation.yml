@@ -22,12 +22,17 @@ services:
         condition: service_healthy
     environment:
       SPRING_PROFILES_ACTIVE: validation
+      SPRING_CONFIG_IMPORT: ""
       PORT: 8080
       SPRING_DATASOURCE_URL: jdbc:postgresql://validation-db:5432/${VALIDATION_DB_NAME}
       SPRING_DATASOURCE_USERNAME: ${VALIDATION_DB_USER}
       SPRING_DATASOURCE_PASSWORD: ${VALIDATION_DB_PASSWORD}
       JWT_SECRET: ${VALIDATION_JWT_SECRET}
       APP_ENVIRONMENT: validation
+      # Local-only startup profile; override to compare sustained throughput.
+      JAVA_TOOL_OPTIONS: "${VALIDATION_JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=75.0 -XX:TieredStopAtLevel=1}"
+      # validation-up.sh prepares V32 in this disposable local database first.
+      APP_COMMAND_RECEIPTS_ENABLED: "true"
       APP_TEST_LAB_ENABLED: "true"
       APP_VERSION: ${APP_VERSION:-0.1.0-validation}
       APP_COMMIT_SHA: ${APP_COMMIT_SHA:-validation-local}

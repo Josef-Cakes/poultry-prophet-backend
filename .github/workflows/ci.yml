@@ -28,7 +28,7 @@ jobs:
       - run: chmod +x mvnw
       - run: python3 scripts/check-migration-track.py
       - run: python3 -m unittest scripts/test-migration-track.py
-        - name: Prepare shared command receipts
+      - name: Prepare shared command receipts
         run: |
           docker exec -i ${{ job.services.postgres.id }} \
             psql -v ON_ERROR_STOP=1 \
