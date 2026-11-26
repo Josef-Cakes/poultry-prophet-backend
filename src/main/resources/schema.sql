@@ -324,6 +324,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_financial_source_operation
 CREATE UNIQUE INDEX IF NOT EXISTS uq_financial_sale_source_event
     ON farm_financial_transaction(source_event_id)
     WHERE source_event_id IS NOT NULL;
+-- Disposable validation databases do not run Flyway. Mirror V34's correction
+-- invariants here; this is not a substitute for the reviewed production migration.
+ALTER TABLE farm_financial_transaction ADD COLUMN IF NOT EXISTS correction_of_id bigint;
+ALTER TABLE farm_financial_transaction ADD COLUMN IF NOT EXISTS correction_expected_updated_at timestamptz;
+ALTER TABLE farm_financial_transaction DROP CONSTRAINT IF EXISTS fk_expense_correction_original;
+ALTER TABLE farm_financial_transaction ADD CONSTRAINT fk_expense_correction_original
+    FOREIGN KEY (correction_of_id) REFERENCES farm_financial_transaction(id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_expense_correction_original
+    ON farm_financial_transaction(correction_of_id) WHERE correction_of_id IS NOT NULL;
 ALTER TABLE batch_event DROP CONSTRAINT IF EXISTS ck_batch_event_sale_amount_positive;
 ALTER TABLE batch_event ADD CONSTRAINT ck_batch_event_sale_amount_positive
     CHECK (sale_amount IS NULL OR sale_amount > 0);
