@@ -10,7 +10,9 @@ startup; this change intentionally provides no fresh-database schema bootstrap f
 The `validation` profile deliberately retains Hibernate `update` and `schema.sql` for a
 disposable local database. It is not a migration test and does not enforce a local host. Use
 the isolated Compose workflow with a local Docker daemon; never select this profile for a
-remote or shared database.
+remote or shared database. The validation initializer mirrors V34's correction foreign key
+and unique index so fresh local validation databases exercise the same basic safeguards;
+it does not create a Flyway history or verify production migration compatibility.
 
 `db/migration` is a frozen collection of legacy scripts, not a Flyway history. Some SQL is
 duplicated in `schema.sql`, some depends on tables created by Hibernate or previous changes,
@@ -23,9 +25,11 @@ discrepancies.
 ## Reviewed track and version 15
 
 Flyway dependencies are installed, but its configured location is only
-`classpath:db/reviewed-migration`, which contains reviewed V26–V33: credential versions, daily receipts, report-linked
+`classpath:db/reviewed-migration`, which contains V26–V34: credential versions, daily receipts, report-linked
 selection sessions, derby dates, transfer population safeguards, unique open review
-follow-ups, shared command receipts, and backend-only application table access. `baseline-on-migrate` is false,
+follow-ups, shared command receipts, backend-only application table access, and the proposed
+expense-correction links. V34 still requires target-specific review and rollout approval.
+`baseline-on-migrate` is false,
 `baseline-version` is 25, validation is enabled, and clean is disabled. Flyway is disabled
 by default and explicitly in Render and the validation profile. The first reviewed migration
 must have a unique integer version of **26 or higher**; `python scripts/check-migration-track.py`
@@ -99,8 +103,8 @@ already accepted commands through an older unprotected application build.
 
 ## Existing Supabase target rehearsal — November 22, 2026
 
-See [release verification](../RELEASE_VERIFICATION_2026-11-22.md). The existing target
-has no Flyway history; the audited baseline is V25. A private public-schema backup
+See [release verification](../RELEASE_VERIFICATION_2026-11-22.md). Before that rollout,
+the existing target had no Flyway history; the audited baseline was V25. A private public-schema backup
 was restored into isolated PostgreSQL 17, V26–V33 applied successfully, a second
 migrate applied zero changes, and every original table row count remained unchanged.
 The user explicitly approved rollout on November 22, 2026. The existing Supabase
@@ -114,10 +118,27 @@ Spring Boot remains the authorization boundary. The audited backend database rol
 has BYPASSRLS; browser roles must have no application-table policies or grants.
 Do not add broad browser policies to work around deployment failures.
 
-After approval, explicitly baseline the audited nonempty public schema at V25 using
-only `db/reviewed-migration`; then migrate V26–V33 and validate. Never scan the legacy
-track, repair checksums, or enable automatic baselining. Recheck row counts, history,
-RLS, browser privileges, and Spring Hibernate `validate` before enabling command receipts.
+### Proposed V34 expense corrections
+
+V34 adds two nullable columns, a self-referencing foreign key without cascading deletes,
+and a partial unique index so an expense has at most one direct correction. Existing
+expenses are not rewritten. It fails if either column or the index already exists: an
+operator must inspect its types, constraints, index definition, existing values, and
+Flyway history and agree on a separate forward strategy for any manually changed schema.
+Do not mark a conflicting migration applied or use `repair` to bypass this review.
+
+Before any future rollout, take and verify a backup, test V34 and a second no-op migrate
+on a disposable restoration of the audited target, and check existing rows, constraints,
+indexes, and Hibernate validation. Plan a maintenance window: `ALTER TABLE` and the
+transactional index build acquire locks. Keep Flyway disabled at normal startup. Never
+drop correction columns or records merely to roll back application code; coordinate any
+recovery with the database owner and reconcile later financial writes.
+
+This target already has baseline V25 and V26–V33; do not baseline it again or replay
+those migrations. After a fresh target and history audit, backup, restore rehearsal,
+and explicit rollout approval, apply only the reviewed pending V34 and validate.
+Never scan the legacy track, repair checksums, or enable automatic baselining. Recheck
+row counts, history, RLS, browser privileges, and Spring Hibernate `validate` before enabling command receipts.
 Enable `APP_COMMAND_RECEIPTS_ENABLED=true` only for the matching verified backend;
 verify `/api/version` reports command receipts and schema readiness. Until then,
 protected queued commands must stay on the device with retryable responses.

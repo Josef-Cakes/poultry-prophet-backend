@@ -25,13 +25,14 @@ class DisposablePostgresMigrationIntegrationTest {
             statement.execute("CREATE TABLE " + schema + ".batch_selection_session (farm_id bigint NOT NULL, batch_id bigint NOT NULL)");
             statement.execute("CREATE TABLE " + schema + ".batch (id bigint PRIMARY KEY, initial_population integer NOT NULL, current_population integer NOT NULL, CONSTRAINT batch_current_population_bounds CHECK (current_population >= 0 AND current_population <= initial_population))");
             statement.execute("CREATE TABLE " + schema + ".handler_task (farm_id bigint NOT NULL, batch_id bigint, source_type varchar(48), status varchar(32) NOT NULL)");
+            statement.execute("CREATE TABLE " + schema + ".farm_financial_transaction (id bigint PRIMARY KEY)");
             statement.execute("INSERT INTO " + schema + ".batch (id, initial_population, current_population) VALUES (1, 100, 100)");
         }
         Flyway flyway = Flyway.configure().dataSource(url, "poultry_validation", "local-disposable-only")
                 .schemas(schema).defaultSchema(schema).baselineVersion("25")
                 .locations("classpath:db/reviewed-migration").cleanDisabled(true).load();
         flyway.baseline();
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(8);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(9);
         assertThat(flyway.migrate().migrationsExecuted).isZero();
         flyway.validate();
         try (var connection = DriverManager.getConnection(url, "poultry_validation", "local-disposable-only");

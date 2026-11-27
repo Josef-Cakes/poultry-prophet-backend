@@ -29,6 +29,26 @@ class StdRemainingTechnicalIntegrationTest {
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper json;
     @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
+
+    @Test
+    void disposableValidationSchemaEnforcesExpenseCorrectionLinks() {
+        Integer foreignKeys = jdbc.queryForObject("""
+                SELECT count(*) FROM pg_constraint c
+                JOIN pg_class t ON t.oid = c.conrelid
+                JOIN pg_namespace n ON n.oid = t.relnamespace
+                WHERE n.nspname = current_schema() AND t.relname = 'farm_financial_transaction'
+                  AND c.conname = 'fk_expense_correction_original' AND c.contype = 'f'
+                  AND c.confrelid = t.oid
+                """, Integer.class);
+        assertThat(foreignKeys).isEqualTo(1);
+        String index = jdbc.queryForObject("""
+                SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema()
+                  AND tablename = 'farm_financial_transaction'
+                  AND indexname = 'uq_expense_correction_original'
+                """, String.class);
+        assertThat(index).contains("UNIQUE INDEX", "correction_of_id", "WHERE");
+    }
+
     @DynamicPropertySource
     static void database(DynamicPropertyRegistry properties) {
         String url = System.getenv("POULTRY_DISPOSABLE_DB_URL");
