@@ -103,8 +103,8 @@ already accepted commands through an older unprotected application build.
 
 ## Existing Supabase target rehearsal — November 22, 2026
 
-See [release verification](../RELEASE_VERIFICATION_2026-11-22.md). The existing target
-has no Flyway history; the audited baseline is V25. A private public-schema backup
+See [release verification](../RELEASE_VERIFICATION_2026-11-22.md). Before that rollout,
+the existing target had no Flyway history; the audited baseline was V25. A private public-schema backup
 was restored into isolated PostgreSQL 17, V26–V33 applied successfully, a second
 migrate applied zero changes, and every original table row count remained unchanged.
 The user explicitly approved rollout on November 22, 2026. The existing Supabase
@@ -134,10 +134,11 @@ transactional index build acquire locks. Keep Flyway disabled at normal startup.
 drop correction columns or records merely to roll back application code; coordinate any
 recovery with the database owner and reconcile later financial writes.
 
-After approval, explicitly baseline the audited nonempty public schema at V25 using
-only `db/reviewed-migration`; then migrate V26–V33 and validate. Never scan the legacy
-track, repair checksums, or enable automatic baselining. Recheck row counts, history,
-RLS, browser privileges, and Spring Hibernate `validate` before enabling command receipts.
+This target already has baseline V25 and V26–V33; do not baseline it again or replay
+those migrations. After a fresh target and history audit, backup, restore rehearsal,
+and explicit rollout approval, apply only the reviewed pending V34 and validate.
+Never scan the legacy track, repair checksums, or enable automatic baselining. Recheck
+row counts, history, RLS, browser privileges, and Spring Hibernate `validate` before enabling command receipts.
 Enable `APP_COMMAND_RECEIPTS_ENABLED=true` only for the matching verified backend;
 verify `/api/version` reports command receipts and schema readiness. Until then,
 protected queued commands must stay on the device with retryable responses.
